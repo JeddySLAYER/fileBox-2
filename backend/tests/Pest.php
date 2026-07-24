@@ -44,7 +44,31 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
+function adminUser(): \App\Models\User
 {
-    // ..
+    $user = \App\Models\User::factory()->create([
+        'must_change_password' => false,
+        'is_active' => true,
+    ]);
+
+    $user->roles()->attach(
+        \App\Models\Role::query()->where('slug', 'administrateur')->firstOrFail()
+    );
+
+    return $user;
 }
+
+function collaboratorUser(): \App\Models\User
+{
+    $user = \App\Models\User::factory()->create([
+        'must_change_password' => false,
+        'is_active' => true,
+    ]);
+
+    $user->roles()->attach(
+        \App\Models\Role::query()->where('slug', 'collaborateur')->firstOrFail()
+    );
+
+    return $user;
+}
+

@@ -1,35 +1,66 @@
 @import 'tailwindcss';
-@import "tw-animate-css";
+@import 'tw-animate-css';
 
 @theme {
-  --color-primary : #D73A31; 
-  --color-primary-foreground : #FFFFFF;
+  --color-primary: #d73a31;
+  --color-primary-foreground: #ffffff;
 
-  --color-secondary : #F7F8FA;
-  --color-secondary-foreground : #1F2430;
+  --color-secondary: #f7f8fa;
+  --color-secondary-foreground: #1f2430;
 
-  --color-accent : #FAECEC;
-  --color-accent-foreground : #C52020;
+  --color-accent: #faecec;
+  --color-accent-foreground: #c52020;
 
-  --color-background : #FFFFFF;
-  --color-foreground : #1F2430;
+  --color-background: #ffffff;
+  --color-foreground: #1f2430;
 
-  --color-muted : #F7F8FA;
-  --color-muted-foreground : #6B7280;
+  --color-muted: #f7f8fa;
+  --color-muted-foreground: #6b7280;
 
-  --color-border : #E5E7EB;
+  --color-border: #e5e7eb;
 
-  -- sidebar
-  --color-sidebar: #FBFBFC;
-  --color-sidebar-foreground: #353B48;
+  --color-sidebar: #fbfbfc;
+  --color-sidebar-foreground: #353b48;
+  --color-sidebar-primary: #d73a31;
+  --color-sidebar-primary-foreground: #ffffff;
+  --color-sidebar-accent: #f5f6f8;
+  --color-sidebar-accent-foreground: #1f2430;
+  --color-sidebar-border: #e7e9ec;
+  --color-sidebar-ring: #d73a31;
 
-  --color-sidebar-primary: #D73A31;
-  --color-sidebar-primary-foreground: #FFFFFF;
+  --shadow-soft: 0 8px 24px rgb(31 36 48 / 0.06);
+  --animate-fade-in: fade-in 0.35s ease-out;
+}
 
-  --color-sidebar-accent: #F5F6F8;
-  --color-sidebar-accent-foreground: #1F2430;
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 
-  --color-sidebar-border: #E7E9EC;
-  --color-sidebar-ring: #D73A31;
+@layer base {
+  html {
+    font-family: 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+  }
 
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+}
+
+@utility shadow-soft {
+  box-shadow: var(--shadow-soft);
+}
+
+@utility animate-fade-in {
+  animation: var(--animate-fade-in);
 }
