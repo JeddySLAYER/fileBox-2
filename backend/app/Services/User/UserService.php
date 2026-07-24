@@ -4,6 +4,7 @@ namespace App\Services\User;
 
 use App\Models\User;
 use App\Notifications\TemporaryPasswordNotification;
+use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -12,17 +13,13 @@ use Illuminate\Validation\ValidationException;
 class UserService
 {
     /**
-     * @param  array{search?: string, department_id?: int, role?: string, is_active?: bool, trashed?: bool}  $filters
+     * @param  array{search?: string, department_id?: int, role?: string, is_active?: bool}  $filters
      */
     public function list(array $filters = [], int $perPage = 15): LengthAwarePaginator
     {
         $query = User::query()
             ->with(['roles', 'department'])
             ->latest();
-
-        if (! empty($filters['trashed'])) {
-            $query->onlyTrashed();
-        }
 
         if (! empty($filters['search'])) {
             $search = mb_strtolower($filters['search']);
@@ -72,11 +69,22 @@ class UserService
             return $user->load(['roles.permissions', 'department']);
         });
 
-        $user->notify(new TemporaryPasswordNotification($temporaryPassword, 'created'));
+        $mailSent = true;
+        $mailError = null;
+
+        try {
+            $user->notify(new TemporaryPasswordNotification($temporaryPassword, 'created'));
+        } catch (\Throwable $e) {
+            report($e);
+            $mailSent = false;
+            $mailError = $e->getMessage();
+        }
 
         return [
             'user' => $user,
             'temporary_password' => $temporaryPassword,
+            'mail_sent' => $mailSent,
+            'mail_error' => $mailError,
         ];
     }
 
@@ -112,14 +120,7 @@ class UserService
         }
 
         $user->tokens()->delete();
-        $user->delete();
-    }
-
-    public function restore(User $user): User
-    {
-        $user->restore();
-
-        return $user->load(['roles.permissions', 'department']);
+        SoftDeleteArchive::archive($user, ['email']);
     }
 
     /**
@@ -134,11 +135,22 @@ class UserService
         $user->save();
 
         $user->tokens()->delete();
-        $user->notify(new TemporaryPasswordNotification($temporaryPassword, 'reset'));
+        $mailSent = true;
+        $mailError = null;
+
+        try {
+            $user->notify(new TemporaryPasswordNotification($temporaryPassword, 'reset'));
+        } catch (\Throwable $e) {
+            report($e);
+            $mailSent = false;
+            $mailError = $e->getMessage();
+        }
 
         return [
             'user' => $user->load(['roles.permissions', 'department']),
             'temporary_password' => $temporaryPassword,
+            'mail_sent' => $mailSent,
+            'mail_error' => $mailError,
         ];
     }
 }

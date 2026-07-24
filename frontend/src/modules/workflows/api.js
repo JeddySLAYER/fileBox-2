@@ -6,5 +6,4 @@ export const workflowsApi = {
   create: (payload) => api.post('/workflows', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/workflows/${id}`, payload).then((r) => r.data),
   remove: (id) => api.delete(`/workflows/${id}`).then((r) => r.data),
-  restore: (id) => api.post(`/workflows/${id}/restore`).then((r) => r.data),
 }

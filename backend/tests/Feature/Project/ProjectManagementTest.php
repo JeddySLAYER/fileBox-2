@@ -42,7 +42,7 @@ test('un admin peut synchroniser les membres d un projet', function () {
         ->assertJsonCount(2, 'project.members');
 });
 
-test('un admin peut supprimer puis restaurer un projet', function () {
+test('un admin peut supprimer un projet et réutiliser son code', function () {
     Sanctum::actingAs(adminUser());
 
     $project = Project::query()->create([
@@ -51,10 +51,18 @@ test('un admin peut supprimer puis restaurer un projet', function () {
     ]);
 
     $this->deleteJson("/api/projects/{$project->id}")->assertOk();
-    expect($project->fresh()->trashed())->toBeTrue();
 
-    $this->postJson("/api/projects/{$project->id}/restore")->assertOk();
-    expect($project->fresh()->trashed())->toBeFalse();
+    $archived = Project::withTrashed()->find($project->id);
+    expect($archived->trashed())->toBeTrue()
+        ->and($archived->code)->not->toBe('PRJ-ARC-2026');
+
+    $this->postJson('/api/projects', [
+        'name' => 'Archive 2',
+        'code' => 'PRJ-ARC-2026',
+    ])->assertCreated()
+        ->assertJsonPath('project.code', 'PRJ-ARC-2026');
+
+    $this->postJson("/api/projects/{$project->id}/restore")->assertNotFound();
 });
 
 test('un admin peut filtrer les projets par département', function () {

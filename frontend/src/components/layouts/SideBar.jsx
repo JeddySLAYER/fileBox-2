@@ -26,7 +26,7 @@ const NAV = [
   {
     label: 'Pilotage',
     items: [
-      { to: '/dashboard', label: 'Tableau de bord', icon: LayoutDashboard, permission: 'dashboard.view' },
+      { to: '/dashboard', label: 'Accueil', icon: LayoutDashboard, always: true },
       { to: '/explorer', label: 'Explorateur', icon: FolderOpen, always: true },
       { to: '/search', label: 'Recherche', icon: Search, always: true },
     ],
@@ -59,7 +59,7 @@ const NAV = [
         to: '/activity',
         label: 'Journal',
         icon: Activity,
-        anyOf: ['settings.manage', 'dashboard.view'],
+        anyOf: ['settings.manage', 'activity.view'],
       },
     ],
   },

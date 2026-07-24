@@ -3,13 +3,14 @@
 namespace App\Services\Department;
 
 use App\Models\Department;
+use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Str;
 
 class DepartmentService
 {
     /**
-     * @param  array{search?: string, trashed?: bool}  $filters
+     * @param  array{search?: string}  $filters
      */
     public function list(array $filters = [], int $perPage = 15): LengthAwarePaginator
     {
@@ -17,10 +18,6 @@ class DepartmentService
             ->with('manager')
             ->withCount(['users', 'projects'])
             ->orderBy('name');
-
-        if (! empty($filters['trashed'])) {
-            $query->onlyTrashed();
-        }
 
         if (! empty($filters['search'])) {
             $search = mb_strtolower($filters['search']);
@@ -59,13 +56,6 @@ class DepartmentService
 
     public function delete(Department $department): void
     {
-        $department->delete();
-    }
-
-    public function restore(Department $department): Department
-    {
-        $department->restore();
-
-        return $department->load('manager')->loadCount(['users', 'projects']);
+        SoftDeleteArchive::archive($department, ['code']);
     }
 }

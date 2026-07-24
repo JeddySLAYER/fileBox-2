@@ -24,7 +24,7 @@ class ProjectController extends Controller
         $this->authorize('viewAny', Project::class);
 
         $projects = $this->projectService->list(
-            filters: $request->only(['search', 'department_id', 'status', 'trashed']),
+            filters: $request->only(['search', 'department_id', 'status']),
             perPage: (int) $request->integer('per_page', 15),
         );
 
@@ -73,21 +73,7 @@ class ProjectController extends Controller
         $this->projectService->delete($project);
 
         return response()->json([
-            'message' => 'Projet placé dans la corbeille.',
-        ]);
-    }
-
-    public function restore(int $id): JsonResponse
-    {
-        $project = Project::onlyTrashed()->findOrFail($id);
-
-        $this->authorize('restore', $project);
-
-        $project = $this->projectService->restore($project);
-
-        return response()->json([
-            'message' => 'Projet restauré.',
-            'project' => new ProjectResource($project),
+            'message' => 'Projet supprimé.',
         ]);
     }
 

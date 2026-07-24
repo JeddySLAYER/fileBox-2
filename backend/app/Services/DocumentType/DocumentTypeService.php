@@ -3,23 +3,19 @@
 namespace App\Services\DocumentType;
 
 use App\Models\DocumentType;
+use App\Support\SoftDeleteArchive;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Str;
 
 class DocumentTypeService
 {
-    public function list(bool $trashed = false): Collection
+    public function list(): Collection
     {
-        $query = DocumentType::query()
+        return DocumentType::query()
             ->with('defaultWorkflow')
             ->withCount('documents')
-            ->orderBy('name');
-
-        if ($trashed) {
-            $query->onlyTrashed();
-        }
-
-        return $query->get();
+            ->orderBy('name')
+            ->get();
     }
 
     /**
@@ -53,13 +49,6 @@ class DocumentTypeService
 
     public function delete(DocumentType $type): void
     {
-        $type->delete();
-    }
-
-    public function restore(DocumentType $type): DocumentType
-    {
-        $type->restore();
-
-        return $type->load('defaultWorkflow')->loadCount('documents');
+        SoftDeleteArchive::archive($type, ['slug']);
     }
 }

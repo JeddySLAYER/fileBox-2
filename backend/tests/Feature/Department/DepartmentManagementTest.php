@@ -43,15 +43,23 @@ test('un admin peut mettre à jour un département', function () {
         ->assertJsonPath('department.name', 'Finance & Comptabilité');
 });
 
-test('un admin peut supprimer puis restaurer un département', function () {
+test('un admin peut supprimer un département et réutiliser son code', function () {
     Sanctum::actingAs(adminUser());
     $department = Department::query()->create(['name' => 'Logistique', 'code' => 'LOG']);
 
     $this->deleteJson("/api/departments/{$department->id}")->assertOk();
-    expect($department->fresh()->trashed())->toBeTrue();
 
-    $this->postJson("/api/departments/{$department->id}/restore")->assertOk();
-    expect($department->fresh()->trashed())->toBeFalse();
+    $archived = Department::withTrashed()->find($department->id);
+    expect($archived->trashed())->toBeTrue()
+        ->and($archived->code)->not->toBe('LOG');
+
+    $this->postJson('/api/departments', [
+        'name' => 'Logistique 2',
+        'code' => 'LOG',
+    ])->assertCreated()
+        ->assertJsonPath('department.code', 'LOG');
+
+    $this->postJson("/api/departments/{$department->id}/restore")->assertNotFound();
 });
 
 test('un collaborateur ne peut pas gérer les départements', function () {

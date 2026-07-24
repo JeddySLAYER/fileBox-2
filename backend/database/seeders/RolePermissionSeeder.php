@@ -54,6 +54,7 @@ class RolePermissionSeeder extends Seeder
             // Système
             ['name' => 'Gérer les paramètres', 'slug' => 'settings.manage', 'module' => 'settings'],
             ['name' => 'Voir le tableau de bord', 'slug' => 'dashboard.view', 'module' => 'dashboard'],
+            ['name' => 'Voir le journal d\'activité', 'slug' => 'activity.view', 'module' => 'activity'],
         ];
 
         foreach ($permissions as $permission) {
@@ -74,6 +75,7 @@ class RolePermissionSeeder extends Seeder
                 'description' => 'Consultation stratégique, validations finales et tableaux de bord.',
                 'permissions' => [
                     'dashboard.view',
+                    'activity.view',
                     'documents.view',
                     'documents.download',
                     'folders.view',
@@ -87,6 +89,7 @@ class RolePermissionSeeder extends Seeder
                 'description' => 'Supervision documentaire limitée au département.',
                 'permissions' => [
                     'dashboard.view',
+                    'activity.view',
                     'departments.manage',
                     'folders.view',
                     'folders.create',
@@ -108,6 +111,7 @@ class RolePermissionSeeder extends Seeder
                 'description' => 'Coordination documentaire des projets supervisés.',
                 'permissions' => [
                     'dashboard.view',
+                    'activity.view',
                     'projects.manage',
                     'folders.view',
                     'folders.create',
@@ -128,7 +132,6 @@ class RolePermissionSeeder extends Seeder
                 'name' => 'Collaborateur',
                 'description' => 'Acteur principal : création, consultation et collaboration documentaire.',
                 'permissions' => [
-                    'dashboard.view',
                     'folders.view',
                     'folders.create',
                     'documents.view',

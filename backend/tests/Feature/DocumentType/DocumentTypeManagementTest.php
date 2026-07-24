@@ -24,5 +24,12 @@ test('un admin peut gérer les types de documents', function () {
         ->assertJsonPath('document_type.name', 'Contrat cadre');
 
     $this->deleteJson("/api/document-types/{$created['id']}")->assertOk();
-    expect(DocumentType::withTrashed()->find($created['id'])->trashed())->toBeTrue();
+    $archived = DocumentType::withTrashed()->find($created['id']);
+    expect($archived->trashed())->toBeTrue()
+        ->and($archived->slug)->not->toBe('contrat');
+
+    $this->postJson('/api/document-types', [
+        'name' => 'Contrat',
+    ])->assertCreated()
+        ->assertJsonPath('document_type.slug', 'contrat');
 });

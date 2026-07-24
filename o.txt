@@ -180,11 +180,12 @@ Règles
 
   GET/POST           /api/users
   GET/PUT/DELETE     /api/users/{id}
-  POST               /api/users/{id}/restore
   POST               /api/users/{id}/reset-password
 
   Création → mdp temporaire + must_change_password + e-mail
-  Soft delete ; pas de self-delete ; reset révoque les tokens
+  Suppression soft (deleted_at) mais définitive côté app : email libéré
+  (réécrit deleted+{id}+…@deleted.local) ; is_active=false ; pas de restore
+  Pas de self-delete ; reset révoque les tokens
 
 
 --- 4.4 Rôles & Permissions (RBAC) ---------------------------------------------
@@ -205,8 +206,8 @@ Rôle invite : AUCUNE permission globale documents.view / folders.view
 
 --- 4.5 Départements & Projets -------------------------------------------------
 
-  /api/departments (+ restore)
-  /api/projects (+ restore, PUT .../members)
+  /api/departments  (delete soft + libère code ; pas de restore)
+  /api/projects     (delete soft + libère code ; PUT .../members ; pas de restore)
 
 
 --- 4.6 Dossiers & Documents ---------------------------------------------------
@@ -240,7 +241,7 @@ Autres règles
 
 --- 4.7 Types, Tags, Commentaires ----------------------------------------------
 
-  /api/document-types (+ restore)
+  /api/document-types  (delete soft + libère slug ; pas de restore)
   /api/tags
   PUT /api/documents/{id}/tags
   /api/documents/{id}/comments
@@ -251,7 +252,7 @@ Autres règles
 
 --- 4.8 Workflows & Validations ------------------------------------------------
 
-  /api/workflows (+ restore)
+  /api/workflows  (delete soft + libère code ; pas de restore)
   POST /api/documents/{id}/workflow/start|restart
   GET  /api/documents/{id}/validations
   POST /api/validations/{id}/approve|reject|request-correction
@@ -297,9 +298,14 @@ Recherche
   GET /api/search?q=&status=&folder_id=&tag=&include_ocr=1&...
   Titre, réf, description, tags, ocr_text ; filtré par accès si besoin
 
-Dashboard (dashboard.view)
+Dashboard (dashboard.view + ReportingScope)
   GET /api/dashboard
   Compteurs, docs par statut, validations pending, activité récente
+  Périmètre :
+    administrateur / direction → global
+    responsable_departement → départements managés (fallback department_id)
+    chef_projet → projets managés
+    collaborateur / invite → pas d'accès KPIs
 
 Sauvegardes (settings.manage) — COMPLET
   GET/POST /api/backups
@@ -309,9 +315,8 @@ Sauvegardes (settings.manage) — COMPLET
   ZIP = data.json (tables) + files/documents/** (binaires)
   Rétention auto via backup.retention_days après chaque création
 
-Journalisation
-  GET /api/activity-logs
-  GET /api/activity-logs/system   (tail laravel.log, settings.manage)
+Journalisation (activity.view)
+  GET /api/activity-logs          (ReportingScope ; métier uniquement)
   Événements métier : auth, documents, dossiers, accès, validations,
   commentaires, backups, settings…
 
@@ -343,7 +348,7 @@ Auth UI
   /search                 recherche (+ include_ocr prêt pour OCR)
   /notifications          liste + badge header (poll 60s)
   /shared                 mes accès (GET /accesses/mine)
-  /trash                  restore docs / dossiers / users (trashed=1)
+  /trash                  corbeille docs + dossiers uniquement (trashed=1)
   /users                  CRUD + reset password
   /roles                  sync permissions
   /departments            CRUD
@@ -363,7 +368,7 @@ Modules front (src/modules/)
 
 Permissions UI = slugs seedés (IMPORTANT)
   roles.manage · departments.manage · projects.manage · workflows.manage
-  document_types.manage · tags.manage · settings.manage · dashboard.view
+  document_types.manage · tags.manage · settings.manage · dashboard.view · activity.view
   users.view|create|update|delete · folders.* · documents.* · …
   PAS de *.view fantômes pour roles/departments/projects/workflows
   Backups → settings.manage (comme le controller backend)
@@ -424,7 +429,7 @@ Permissions (slugs seed — ~28)
   versions.manage · document_types.manage · tags.manage
   comments.create
   workflows.manage · validations.act · accesses.manage
-  settings.manage · dashboard.view
+  settings.manage · dashboard.view · activity.view
 
 
 ================================================================================
@@ -462,7 +467,8 @@ Frontend — nouveau module
   unwrapList / unwrapPaginated pour les Resources Laravel
 
 Transverse
-  Soft delete + restore quand la corbeille est prévue
+  Corbeille (restore) = documents + dossiers uniquement
+  Autres entités soft-delete via SoftDeleteArchive (deleted_at + champs uniques libérés)
   Fichiers hors public/ ; métadonnées + chemin en BDD
   Traitements lourds futurs (OCR, IA) → queues Laravel
   Commentaires « ponytail: » = raccourci documenté (plafond + upgrade)
@@ -526,8 +532,8 @@ Accès               /api/accesses, .../accesses       /shared + onglet Partage
 Notifications       /api/notifications                /notifications (+ badge)
 Settings            /api/settings                     /settings
 Backups             /api/backups                      /backups
-Activity            /api/activity-logs(+ /system)     /activity
-Corbeille           ?trashed=1 + .../restore          /trash
+Activity            /api/activity-logs                /activity
+Corbeille           docs/folders ?trashed=1 + restore /trash
 Preview signée      /api/signed/documents/...         bouton Aperçu
 
 

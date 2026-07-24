@@ -3,6 +3,7 @@
 namespace App\Services\Project;
 
 use App\Models\Project;
+use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -10,7 +11,7 @@ use Illuminate\Support\Str;
 class ProjectService
 {
     /**
-     * @param  array{search?: string, department_id?: int, status?: string, trashed?: bool}  $filters
+     * @param  array{search?: string, department_id?: int, status?: string}  $filters
      */
     public function list(array $filters = [], int $perPage = 15): LengthAwarePaginator
     {
@@ -18,10 +19,6 @@ class ProjectService
             ->with(['department', 'manager'])
             ->withCount('members')
             ->latest();
-
-        if (! empty($filters['trashed'])) {
-            $query->onlyTrashed();
-        }
 
         if (! empty($filters['search'])) {
             $search = mb_strtolower($filters['search']);
@@ -91,14 +88,7 @@ class ProjectService
 
     public function delete(Project $project): void
     {
-        $project->delete();
-    }
-
-    public function restore(Project $project): Project
-    {
-        $project->restore();
-
-        return $project->load(['department', 'manager', 'members'])->loadCount('members');
+        SoftDeleteArchive::archive($project, ['code']);
     }
 
     /**

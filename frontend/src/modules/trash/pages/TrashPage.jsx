@@ -15,7 +15,6 @@ import { can } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { documentsApi } from '@/modules/documents/api'
 import { foldersApi } from '@/modules/folders/api'
-import { usersApi } from '@/modules/users/api'
 import { useAuthStore } from '@/stores/authStore'
 
 export default function TrashPage() {
@@ -26,7 +25,6 @@ export default function TrashPage() {
   const tabs = [
     { id: 'documents', label: 'Documents', show: can(user, 'documents.view') },
     { id: 'folders', label: 'Dossiers', show: can(user, 'folders.view') },
-    { id: 'users', label: 'Utilisateurs', show: can(user, 'users.view') },
   ].filter((t) => t.show)
 
   const docsQuery = useQuery({
@@ -39,12 +37,6 @@ export default function TrashPage() {
     queryKey: queryKeys.folders({ trashed: true }),
     queryFn: () => foldersApi.list({ trashed: 1 }),
     enabled: tab === 'folders',
-  })
-
-  const usersQuery = useQuery({
-    queryKey: queryKeys.users({ trashed: true }),
-    queryFn: () => usersApi.list({ trashed: 1, per_page: 50 }),
-    enabled: tab === 'users',
   })
 
   const restoreDoc = useMutation({
@@ -65,18 +57,8 @@ export default function TrashPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
-  const restoreUser = useMutation({
-    mutationFn: (id) => usersApi.restore(id),
-    onSuccess: (res) => {
-      toast.success(res.message)
-      queryClient.invalidateQueries({ queryKey: ['users'] })
-    },
-    onError: (e) => toast.error(getErrorMessage(e)),
-  })
-
   const documents = unwrapPaginated(docsQuery.data).data
   const folders = unwrapList(foldersQuery.data)
-  const users = unwrapPaginated(usersQuery.data).data
 
   if (tabs.length === 0) {
     return <EmptyState title="Accès refusé" description="Aucune permission de corbeille." />
@@ -86,7 +68,7 @@ export default function TrashPage() {
     <>
       <PageHeader
         title="Corbeille"
-        description="Restauration soft-delete (trashed=1)."
+        description="Documents et dossiers supprimés — restauration possible."
       />
 
       <Tabs
@@ -144,29 +126,6 @@ export default function TrashPage() {
                     variant="secondary"
                     onClick={() => restoreFolder.mutate(folder.id)}
                   >
-                    <RotateCcw className="h-4 w-4" />
-                    Restaurer
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )
-        ) : null}
-
-        {tab === 'users' ? (
-          usersQuery.isLoading ? (
-            <LoadingScreen />
-          ) : users.length === 0 ? (
-            <EmptyState title="Aucun utilisateur en corbeille" />
-          ) : (
-            <ul className="divide-y divide-border rounded-xl border border-border bg-background">
-              {users.map((u) => (
-                <li key={u.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                  <div>
-                    <p className="font-medium">{u.name}</p>
-                    <p className="text-xs text-muted-foreground">{u.email}</p>
-                  </div>
-                  <Button size="sm" variant="secondary" onClick={() => restoreUser.mutate(u.id)}>
                     <RotateCcw className="h-4 w-4" />
                     Restaurer
                   </Button>

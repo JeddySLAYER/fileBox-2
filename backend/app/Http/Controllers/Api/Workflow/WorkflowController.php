@@ -23,7 +23,7 @@ class WorkflowController extends Controller
         $this->authorize('viewAny', Workflow::class);
 
         $workflows = $this->workflowService->list(
-            filters: $request->only(['search', 'is_active', 'trashed']),
+            filters: $request->only(['search', 'is_active']),
             perPage: (int) $request->integer('per_page', 15),
         );
 
@@ -73,20 +73,7 @@ class WorkflowController extends Controller
         $this->workflowService->delete($workflow);
 
         return response()->json([
-            'message' => 'Workflow placé dans la corbeille.',
-        ]);
-    }
-
-    public function restore(int $id): JsonResponse
-    {
-        $workflow = Workflow::onlyTrashed()->findOrFail($id);
-        $this->authorize('restore', $workflow);
-
-        $workflow = $this->workflowService->restore($workflow);
-
-        return response()->json([
-            'message' => 'Workflow restauré.',
-            'workflow' => new WorkflowResource($workflow),
+            'message' => 'Workflow supprimé.',
         ]);
     }
 }

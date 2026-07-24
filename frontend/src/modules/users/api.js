@@ -6,7 +6,6 @@ export const usersApi = {
   create: (payload) => api.post('/users', payload).then((r) => r.data),
   update: (id, payload) => api.put(`/users/${id}`, payload).then((r) => r.data),
   remove: (id) => api.delete(`/users/${id}`).then((r) => r.data),
-  restore: (id) => api.post(`/users/${id}/restore`).then((r) => r.data),
   resetPassword: (id) => api.post(`/users/${id}/reset-password`).then((r) => r.data),
 }
 

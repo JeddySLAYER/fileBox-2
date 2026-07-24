@@ -44,7 +44,6 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::get('users/{user}', [UserController::class, 'show']);
     Route::put('users/{user}', [UserController::class, 'update']);
     Route::delete('users/{user}', [UserController::class, 'destroy']);
-    Route::post('users/{id}/restore', [UserController::class, 'restore']);
     Route::post('users/{user}/reset-password', [UserController::class, 'resetPassword']);
 
     // Rôles
@@ -68,7 +67,6 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::get('departments/{department}', [DepartmentController::class, 'show']);
     Route::put('departments/{department}', [DepartmentController::class, 'update']);
     Route::delete('departments/{department}', [DepartmentController::class, 'destroy']);
-    Route::post('departments/{id}/restore', [DepartmentController::class, 'restore']);
 
     // Projets
     Route::get('projects', [ProjectController::class, 'index']);
@@ -76,7 +74,6 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::get('projects/{project}', [ProjectController::class, 'show']);
     Route::put('projects/{project}', [ProjectController::class, 'update']);
     Route::delete('projects/{project}', [ProjectController::class, 'destroy']);
-    Route::post('projects/{id}/restore', [ProjectController::class, 'restore']);
     Route::put('projects/{project}/members', [ProjectController::class, 'syncMembers']);
 
     // Dossiers
@@ -95,7 +92,6 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::get('document-types/{document_type}', [DocumentTypeController::class, 'show']);
     Route::put('document-types/{document_type}', [DocumentTypeController::class, 'update']);
     Route::delete('document-types/{document_type}', [DocumentTypeController::class, 'destroy']);
-    Route::post('document-types/{id}/restore', [DocumentTypeController::class, 'restore']);
 
     // Tags
     Route::get('tags', [TagController::class, 'index']);
@@ -137,7 +133,6 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::get('workflows/{workflow}', [WorkflowController::class, 'show']);
     Route::put('workflows/{workflow}', [WorkflowController::class, 'update']);
     Route::delete('workflows/{workflow}', [WorkflowController::class, 'destroy']);
-    Route::post('workflows/{id}/restore', [WorkflowController::class, 'restore']);
 
     // Validations
     Route::get('documents/{document}/validations', [ValidationController::class, 'index']);
@@ -183,5 +178,4 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
 
     // Journalisation
     Route::get('activity-logs', [ActivityLogController::class, 'index']);
-    Route::get('activity-logs/system', [ActivityLogController::class, 'system']);
 });

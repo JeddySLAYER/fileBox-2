@@ -136,10 +136,10 @@ test('création document est journalisée', function () {
     ]);
 });
 
-test('logs système accessibles aux admins settings', function () {
+test('journal metier accessible aux admins', function () {
     Sanctum::actingAs(adminUser());
 
-    $this->getJson('/api/activity-logs/system?lines=20')
+    $this->getJson('/api/activity-logs')
         ->assertOk()
-        ->assertJsonStructure(['lines']);
+        ->assertJsonStructure(['data']);
 });

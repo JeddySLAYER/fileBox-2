@@ -312,9 +312,9 @@ export default function UsersPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        title="Mettre en corbeille"
+                        title="Supprimer"
                         onClick={() => {
-                          if (window.confirm(`Supprimer ${user.name} ?`)) {
+                          if (window.confirm(`Supprimer définitivement ${user.name} ?`)) {
                             deactivateUser.mutate(user.id)
                           }
                         }}

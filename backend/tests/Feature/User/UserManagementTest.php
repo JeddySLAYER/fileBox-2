@@ -78,14 +78,25 @@ test('un admin peut mettre à jour un utilisateur', function () {
     expect($target->fresh()->roles->pluck('slug')->all())->toContain('chef_projet');
 });
 
-test('un admin peut supprimer un utilisateur (soft delete)', function () {
+test('un admin peut supprimer un utilisateur et réutiliser son email', function () {
     Sanctum::actingAs(adminUser());
-    $target = User::factory()->create();
+    $target = User::factory()->create(['email' => 'reuse@filebox.test']);
+    $email = $target->email;
 
     $this->deleteJson("/api/users/{$target->id}")
         ->assertOk();
 
-    expect($target->fresh()->trashed())->toBeTrue();
+    $archived = User::withTrashed()->find($target->id);
+
+    expect($archived->trashed())->toBeTrue()
+        ->and($archived->email)->not->toBe($email)
+        ->and($archived->is_active)->toBeFalse();
+
+    $this->postJson('/api/users', [
+        'name' => 'Nouveau',
+        'email' => $email,
+    ])->assertCreated()
+        ->assertJsonPath('user.email', $email);
 });
 
 test('un admin ne peut pas se supprimer lui-même', function () {
@@ -96,16 +107,12 @@ test('un admin ne peut pas se supprimer lui-même', function () {
         ->assertForbidden();
 });
 
-test('un admin peut restaurer un utilisateur', function () {
+test('la restauration utilisateur n\'existe plus', function () {
     Sanctum::actingAs(adminUser());
     $target = User::factory()->create();
-    $target->delete();
+    $this->deleteJson("/api/users/{$target->id}")->assertOk();
 
-    $this->postJson("/api/users/{$target->id}/restore")
-        ->assertOk()
-        ->assertJsonPath('user.id', $target->id);
-
-    expect($target->fresh()->trashed())->toBeFalse();
+    $this->postJson("/api/users/{$target->id}/restore")->assertNotFound();
 });
 
 test('un admin peut régénérer un mot de passe temporaire', function () {

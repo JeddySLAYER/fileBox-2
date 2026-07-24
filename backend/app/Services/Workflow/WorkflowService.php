@@ -5,6 +5,7 @@ namespace App\Services\Workflow;
 use App\Models\User;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -13,7 +14,7 @@ use Illuminate\Validation\ValidationException;
 class WorkflowService
 {
     /**
-     * @param  array{search?: string, is_active?: bool|string|null, trashed?: bool}  $filters
+     * @param  array{search?: string, is_active?: bool|string|null}  $filters
      */
     public function list(array $filters = [], int $perPage = 15): LengthAwarePaginator
     {
@@ -21,10 +22,6 @@ class WorkflowService
             ->with(['steps.responsibleRole', 'steps.responsibleUser', 'creator'])
             ->withCount(['steps', 'documents'])
             ->orderBy('name');
-
-        if (! empty($filters['trashed'])) {
-            $query->onlyTrashed();
-        }
 
         if (! empty($filters['search'])) {
             $search = mb_strtolower($filters['search']);
@@ -115,14 +112,7 @@ class WorkflowService
             ]);
         }
 
-        $workflow->delete();
-    }
-
-    public function restore(Workflow $workflow): Workflow
-    {
-        $workflow->restore();
-
-        return $this->loadWorkflow($workflow);
+        SoftDeleteArchive::archive($workflow, ['code']);
     }
 
     private function loadWorkflow(Workflow $workflow): Workflow

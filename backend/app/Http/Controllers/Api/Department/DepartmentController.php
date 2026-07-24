@@ -23,7 +23,7 @@ class DepartmentController extends Controller
         $this->authorize('viewAny', Department::class);
 
         $departments = $this->departmentService->list(
-            filters: $request->only(['search', 'trashed']),
+            filters: $request->only(['search']),
             perPage: (int) $request->integer('per_page', 15),
         );
 
@@ -72,21 +72,7 @@ class DepartmentController extends Controller
         $this->departmentService->delete($department);
 
         return response()->json([
-            'message' => 'Département placé dans la corbeille.',
-        ]);
-    }
-
-    public function restore(int $id): JsonResponse
-    {
-        $department = Department::onlyTrashed()->findOrFail($id);
-
-        $this->authorize('restore', $department);
-
-        $department = $this->departmentService->restore($department);
-
-        return response()->json([
-            'message' => 'Département restauré.',
-            'department' => new DepartmentResource($department),
+            'message' => 'Département supprimé.',
         ]);
     }
 }

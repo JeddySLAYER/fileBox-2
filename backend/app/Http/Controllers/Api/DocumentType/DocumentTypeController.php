@@ -23,7 +23,7 @@ class DocumentTypeController extends Controller
         $this->authorize('viewAny', DocumentType::class);
 
         return DocumentTypeResource::collection(
-            $this->documentTypeService->list((bool) $request->boolean('trashed'))
+            $this->documentTypeService->list()
         );
     }
 
@@ -68,19 +68,6 @@ class DocumentTypeController extends Controller
 
         $this->documentTypeService->delete($documentType);
 
-        return response()->json(['message' => 'Type de document placé dans la corbeille.']);
-    }
-
-    public function restore(int $id): JsonResponse
-    {
-        $type = DocumentType::onlyTrashed()->findOrFail($id);
-        $this->authorize('restore', $type);
-
-        $type = $this->documentTypeService->restore($type);
-
-        return response()->json([
-            'message' => 'Type de document restauré.',
-            'document_type' => new DocumentTypeResource($type),
-        ]);
+        return response()->json(['message' => 'Type de document supprimé.']);
     }
 }

@@ -3,10 +3,16 @@
 namespace App\Services\ActivityLog;
 
 use App\Models\ActivityLog;
+use App\Models\Document;
+use App\Models\Folder;
+use App\Models\Project;
 use App\Models\User;
+use App\Support\ReportingScope;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 class ActivityLogService
 {
@@ -38,11 +44,17 @@ class ActivityLogService
     /**
      * @param  array{action?: string, user_id?: int, subject_type?: string, search?: string}  $filters
      */
-    public function list(array $filters = [], int $perPage = 30): LengthAwarePaginator
+    public function list(User $actor, array $filters = [], int $perPage = 30): LengthAwarePaginator
     {
-        $query = ActivityLog::query()
-            ->with('user')
-            ->latest();
+        $scope = new ReportingScope($actor);
+
+        if (! $scope->canAccess()) {
+            throw ValidationException::withMessages([
+                'activity' => ['Vous n\'avez pas accès au journal d\'activité.'],
+            ]);
+        }
+
+        $query = $this->scopedQuery($scope)->with('user');
 
         if (! empty($filters['action'])) {
             $query->where('action', $filters['action']);
@@ -61,27 +73,39 @@ class ActivityLogService
             $query->whereRaw('LOWER(description) LIKE ?', ["%{$search}%"]);
         }
 
-        return $query->paginate($perPage);
+        return $query->latest()->paginate($perPage);
     }
 
-    /**
-     * Dernières lignes du journal technique Laravel.
-     *
-     * @return list<string>
-     */
-    public function tailSystemLog(int $lines = 100): array
+    public function scopedQuery(ReportingScope $scope): Builder
     {
-        $path = storage_path('logs/laravel.log');
-        if (! is_file($path)) {
-            return [];
+        $query = ActivityLog::query();
+
+        if ($scope->isGlobal()) {
+            return $query;
         }
 
-        // ponytail: read whole file for small logs; upgrade: seek from end for multi-GB
-        $content = file($path, FILE_IGNORE_NEW_LINES);
-        if ($content === false) {
-            return [];
+        // Masquer journaux techniques / auth hors vue globale
+        $query->where('action', 'not like', 'settings.%')
+            ->where('action', 'not like', 'backup.%')
+            ->where('action', 'not like', 'auth.%');
+
+        if ($scope->mode() === ReportingScope::MODE_DEPARTMENT) {
+            $ids = $scope->departmentIds() ?: [0];
+
+            return $query->where(function (Builder $q) use ($ids) {
+                $q->whereHasMorph('subject', [Document::class], fn (Builder $s) => $s->whereIn('department_id', $ids))
+                    ->orWhereHasMorph('subject', [Folder::class], fn (Builder $s) => $s->whereIn('department_id', $ids))
+                    ->orWhereHasMorph('subject', [Project::class], fn (Builder $s) => $s->whereIn('department_id', $ids))
+                    ->orWhereHas('user', fn (Builder $u) => $u->whereIn('department_id', $ids));
+            });
         }
 
-        return array_values(array_slice($content, -$lines));
+        $projectIds = $scope->projectIds() ?: [0];
+
+        return $query->where(function (Builder $q) use ($projectIds) {
+            $q->whereHasMorph('subject', [Document::class], fn (Builder $s) => $s->whereIn('project_id', $projectIds))
+                ->orWhereHasMorph('subject', [Folder::class], fn (Builder $s) => $s->whereIn('project_id', $projectIds))
+                ->orWhereHasMorph('subject', [Project::class], fn (Builder $s) => $s->whereIn('id', $projectIds));
+        });
     }
 }

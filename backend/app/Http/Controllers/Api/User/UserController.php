@@ -23,7 +23,7 @@ class UserController extends Controller
         $this->authorize('viewAny', User::class);
 
         $users = $this->userService->list(
-            filters: $request->only(['search', 'department_id', 'role', 'is_active', 'trashed']),
+            filters: $request->only(['search', 'department_id', 'role', 'is_active']),
             perPage: (int) $request->integer('per_page', 15),
         );
 
@@ -37,8 +37,11 @@ class UserController extends Controller
         $result = $this->userService->create($request->validated());
 
         return response()->json([
-            'message' => 'Utilisateur créé. Un mot de passe temporaire a été envoyé par e-mail.',
+            'message' => $result['mail_sent']
+                ? 'Utilisateur créé. Un mot de passe temporaire a été envoyé par e-mail.'
+                : 'Utilisateur créé, mais l\'e-mail n\'a pas pu être envoyé. Utilisez le mot de passe temporaire affiché.',
             'temporary_password' => $result['temporary_password'],
+            'mail_sent' => $result['mail_sent'],
             'user' => new UserResource($result['user']),
         ], 201);
     }
@@ -73,21 +76,7 @@ class UserController extends Controller
         $this->userService->delete($request->user(), $user);
 
         return response()->json([
-            'message' => 'Utilisateur placé dans la corbeille.',
-        ]);
-    }
-
-    public function restore(int $id): JsonResponse
-    {
-        $user = User::onlyTrashed()->findOrFail($id);
-
-        $this->authorize('restore', $user);
-
-        $user = $this->userService->restore($user);
-
-        return response()->json([
-            'message' => 'Utilisateur restauré.',
-            'user' => new UserResource($user),
+            'message' => 'Utilisateur supprimé.',
         ]);
     }
 
@@ -98,8 +87,11 @@ class UserController extends Controller
         $result = $this->userService->resetTemporaryPassword($user);
 
         return response()->json([
-            'message' => 'Mot de passe temporaire régénéré et envoyé par e-mail.',
+            'message' => $result['mail_sent']
+                ? 'Mot de passe temporaire régénéré et envoyé par e-mail.'
+                : 'Mot de passe temporaire régénéré, mais l\'e-mail n\'a pas pu être envoyé.',
             'temporary_password' => $result['temporary_password'],
+            'mail_sent' => $result['mail_sent'],
             'user' => new UserResource($result['user']),
         ]);
     }

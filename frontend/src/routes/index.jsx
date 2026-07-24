@@ -135,7 +135,7 @@ export default function AppRoutes() {
           <Route
             path="/activity"
             element={
-              <RequirePermissionRoute anyOf={['settings.manage', 'dashboard.view']}>
+              <RequirePermissionRoute anyOf={['settings.manage', 'activity.view']}>
                 <ActivityPage />
               </RequirePermissionRoute>
             }
