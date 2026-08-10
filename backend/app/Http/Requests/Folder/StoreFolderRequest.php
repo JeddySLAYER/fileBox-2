@@ -19,6 +19,8 @@ class StoreFolderRequest extends FormRequest
             'parent_id' => ['nullable', 'integer', 'exists:folders,id'],
             'project_id' => ['nullable', 'integer', 'exists:projects,id'],
             'department_id' => ['nullable', 'integer', 'exists:departments,id'],
+            'tag_ids' => ['sometimes', 'array'],
+            'tag_ids.*' => ['integer', 'exists:tags,id', 'distinct'],
         ];
     }
 }

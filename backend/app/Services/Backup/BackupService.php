@@ -2,9 +2,10 @@
 
 namespace App\Services\Backup;
 
+use App\Events\Backup\BackupCreated;
+use App\Events\Backup\BackupRestored;
 use App\Models\Backup;
 use App\Models\User;
-use App\Services\ActivityLog\ActivityLogService;
 use App\Services\Setting\SettingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -40,7 +41,6 @@ class BackupService
     ];
 
     public function __construct(
-        private readonly ActivityLogService $activityLog,
         private readonly SettingService $settings,
     ) {}
 
@@ -102,12 +102,7 @@ class BackupService
             'created_by' => $actor->id,
         ]);
 
-        $this->activityLog->log(
-            action: 'backup.created',
-            user: $actor,
-            subject: $backup,
-            description: "Sauvegarde créée : {$name}",
-        );
+        event(new BackupCreated($backup, $actor));
 
         $this->applyRetention();
 
@@ -195,12 +190,7 @@ class BackupService
         $backup->restored_at = now();
         $backup->save();
 
-        $this->activityLog->log(
-            action: 'backup.restored',
-            user: $actor,
-            subject: $backup,
-            description: "Sauvegarde restaurée : {$backup->name}",
-        );
+        event(new BackupRestored($backup, $actor));
 
         return $backup->load('creator');
     }

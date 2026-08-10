@@ -1,23 +1,26 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Tag, Trash2 } from 'lucide-react'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import RequirePermission from '@/components/RequirePermission'
-import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
-import Card from '@/components/ui/Card'
-import EmptyState from '@/components/ui/EmptyState'
+import DataTable from '@/components/ui/DataTable'
 import Input from '@/components/ui/Input'
 import Label from '@/components/ui/Label'
-import LoadingScreen from '@/components/ui/LoadingScreen'
+import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { getErrorMessage } from '@/lib/api'
-import { unwrapList } from '@/lib/apiHelpers'
+import { unwrapList, paginateClient, PAGE_SIZE } from '@/lib/apiHelpers'
 import { queryKeys } from '@/lib/queryClient'
 import { tagsApi } from '@/modules/tags/api'
 
 export default function TagsPage() {
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
+  const [page, setPage] = useState(1)
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
   const [name, setName] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -29,7 +32,17 @@ export default function TagsPage() {
     mutationFn: () => tagsApi.create({ name }),
     onSuccess: (res) => {
       toast.success(res.message)
-      setName('')
+      closeForm()
+      queryClient.invalidateQueries({ queryKey: queryKeys.tags })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const updateTag = useMutation({
+    mutationFn: () => tagsApi.update(editingId, { name }),
+    onSuccess: (res) => {
+      toast.success(res.message ?? 'Tag mis à jour.')
+      closeForm()
       queryClient.invalidateQueries({ queryKey: queryKeys.tags })
     },
     onError: (e) => toast.error(getErrorMessage(e)),
@@ -45,64 +58,132 @@ export default function TagsPage() {
   })
 
   const tags = unwrapList(data)
+  const { data: pageRows, meta } = useMemo(
+    () => paginateClient(tags, page, PAGE_SIZE),
+    [tags, page],
+  )
+  const saving = createTag.isPending || updateTag.isPending
+
+  function closeForm() {
+    setShowForm(false)
+    setEditingId(null)
+    setName('')
+  }
+
+  function openCreate() {
+    setEditingId(null)
+    setName('')
+    setShowForm(true)
+  }
+
+  function openEdit(tag) {
+    setEditingId(tag.id)
+    setName(tag.name ?? '')
+    setShowForm(true)
+  }
+
+  const columns = [
+    {
+      key: 'name',
+      header: 'Tag',
+      cell: (t) => <span className="font-medium">{t.name}</span>,
+    },
+    {
+      key: 'slug',
+      header: 'Slug',
+      cell: (t) => <span className="text-xs text-muted-foreground">{t.slug || '—'}</span>,
+    },
+    {
+      key: 'docs',
+      header: 'Documents',
+      cell: (t) => t.documents_count ?? 0,
+    },
+    {
+      key: 'actions',
+      header: 'Actions',
+      className: 'w-[1%] whitespace-nowrap',
+      cell: (t) => (
+        <div className="flex gap-1">
+          <Button variant="ghost" size="sm" title="Modifier" onClick={() => openEdit(t)}>
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Supprimer"
+            onClick={async () => {
+              const ok = await confirm({
+                title: 'Supprimer le tag',
+                description: `Supprimer « ${t.name} » ?`,
+                confirmLabel: 'Supprimer',
+              })
+              if (ok) removeTag.mutate(t.id)
+            }}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      ),
+    },
+  ]
 
   return (
     <RequirePermission permission="tags.manage">
-      <PageHeader title="Tags" description="Étiquettes documentaires (API /tags)." />
+      <PageHeader
+        title="Tags"
+        description="Étiquettes pour classer les documents."
+        actions={
+          <Button size="sm" onClick={openCreate}>
+            <Plus className="h-4 w-4" />
+            Nouveau tag
+          </Button>
+        }
+      />
 
-      <Card className="mb-6">
+      <DataTable
+        columns={columns}
+        rows={pageRows}
+        loading={isLoading}
+        emptyTitle="Aucun tag"
+        meta={meta}
+        onPageChange={setPage}
+      />
+
+      <Modal
+        open={showForm}
+        onClose={closeForm}
+        title={editingId ? 'Modifier le tag' : 'Nouveau tag'}
+        size="sm"
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={closeForm}>
+              Annuler
+            </Button>
+            <Button type="submit" form="tag-form" disabled={saving}>
+              {editingId ? 'Enregistrer' : 'Créer'}
+            </Button>
+          </>
+        }
+      >
         <form
-          className="flex flex-wrap items-end gap-2"
+          id="tag-form"
           onSubmit={(e) => {
             e.preventDefault()
             if (!name.trim()) return
-            createTag.mutate()
+            if (editingId) updateTag.mutate()
+            else createTag.mutate()
           }}
         >
-          <div className="min-w-[200px] flex-1">
-            <Label htmlFor="tag-name">Nouveau tag</Label>
-            <Input
-              id="tag-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ex. contrat"
-              required
-            />
-          </div>
-          <Button type="submit" disabled={createTag.isPending}>
-            <Plus className="h-4 w-4" />
-            Ajouter
-          </Button>
+          <Label htmlFor="tag-name">Nom</Label>
+          <Input
+            id="tag-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex. contrat"
+            required
+          />
         </form>
-      </Card>
-
-      {isLoading ? (
-        <LoadingScreen />
-      ) : tags.length === 0 ? (
-        <EmptyState title="Aucun tag" />
-      ) : (
-        <div className="flex flex-wrap gap-2">
-          {tags.map((tag) => (
-            <div
-              key={tag.id}
-              className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2"
-            >
-              <Tag className="h-3.5 w-3.5 text-primary" />
-              <span className="text-sm font-medium">{tag.name}</span>
-              <Badge>{tag.documents_count ?? 0}</Badge>
-              <button
-                type="button"
-                className="text-muted-foreground hover:text-accent-foreground"
-                onClick={() => {
-                  if (window.confirm(`Supprimer « ${tag.name} » ?`)) removeTag.mutate(tag.id)
-                }}
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      </Modal>
     </RequirePermission>
   )
 }

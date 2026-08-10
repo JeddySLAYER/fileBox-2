@@ -43,6 +43,74 @@ test('un admin peut mettre à jour un département', function () {
         ->assertJsonPath('department.name', 'Finance & Comptabilité');
 });
 
+test('changer le responsable garde l ancien comme membre du département', function () {
+    Sanctum::actingAs(adminUser());
+
+    $oldManager = User::factory()->create();
+    $newManager = User::factory()->create(['department_id' => null]);
+
+    $department = Department::query()->create([
+        'name' => 'Marketing',
+        'code' => 'MKT',
+        'manager_id' => $oldManager->id,
+    ]);
+    $oldManager->update(['department_id' => $department->id]);
+
+    $this->putJson("/api/departments/{$department->id}", [
+        'manager_id' => $newManager->id,
+    ])->assertOk()
+        ->assertJsonPath('department.manager.id', $newManager->id);
+
+    expect($department->fresh()->manager_id)->toBe($newManager->id)
+        ->and($oldManager->fresh()->department_id)->toBe($department->id)
+        ->and($newManager->fresh()->department_id)->toBe($department->id);
+});
+
+test('changer le responsable transfère le rôle responsable_departement', function () {
+    Sanctum::actingAs(adminUser());
+
+    $roleId = \App\Models\Role::query()->where('slug', 'responsable_departement')->value('id');
+
+    $oldManager = User::factory()->create();
+    $oldManager->roles()->attach($roleId);
+
+    $newManager = User::factory()->create();
+    $collaborateurId = \App\Models\Role::query()->where('slug', 'collaborateur')->value('id');
+    $newManager->roles()->attach($collaborateurId);
+
+    $department = Department::query()->create([
+        'name' => 'Ventes',
+        'code' => 'VTE',
+        'manager_id' => $oldManager->id,
+    ]);
+    $oldManager->update(['department_id' => $department->id]);
+
+    $this->putJson("/api/departments/{$department->id}", [
+        'manager_id' => $newManager->id,
+    ])->assertOk();
+
+    expect($newManager->fresh()->roles->pluck('slug')->all())
+        ->toContain('responsable_departement')
+        ->and($oldManager->fresh()->roles->pluck('slug')->all())
+        ->not->toContain('responsable_departement');
+});
+
+test('créer un département avec responsable attribue le rôle', function () {
+    Sanctum::actingAs(adminUser());
+
+    $manager = User::factory()->create();
+
+    $this->postJson('/api/departments', [
+        'name' => 'Qualité',
+        'code' => 'QUA',
+        'manager_id' => $manager->id,
+    ])->assertCreated();
+
+    expect($manager->fresh()->roles->pluck('slug')->all())
+        ->toContain('responsable_departement')
+        ->and($manager->fresh()->department_id)->not->toBeNull();
+});
+
 test('un admin peut supprimer un département et réutiliser son code', function () {
     Sanctum::actingAs(adminUser());
     $department = Department::query()->create(['name' => 'Logistique', 'code' => 'LOG']);

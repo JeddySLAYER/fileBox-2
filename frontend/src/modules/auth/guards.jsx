@@ -11,13 +11,10 @@ export function RequireAuth() {
   const mustChangePassword = useAuthStore((s) => s.mustChangePassword)
   const setUser = useAuthStore((s) => s.setUser)
   const clearSession = useAuthStore((s) => s.clearSession)
-  const [ready, setReady] = useState(Boolean(user) || !token)
+  const [ready, setReady] = useState(() => Boolean(user))
 
   useEffect(() => {
-    if (!token) {
-      setReady(true)
-      return
-    }
+    if (!token) return
 
     let cancelled = false
     authApi

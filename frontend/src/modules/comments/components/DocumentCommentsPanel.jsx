@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MessageSquare, Send, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import Button from '@/components/ui/Button'
 import EmptyState from '@/components/ui/EmptyState'
 import Input from '@/components/ui/Input'
@@ -17,6 +18,7 @@ import { useAuthStore } from '@/stores/authStore'
 export default function DocumentCommentsPanel({ documentId }) {
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [content, setContent] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -92,10 +94,13 @@ export default function DocumentCommentsPanel({ documentId }) {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => {
-                      if (window.confirm('Supprimer ce commentaire ?')) {
-                        removeComment.mutate(comment.id)
-                      }
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: 'Supprimer le commentaire',
+                        description: 'Supprimer ce commentaire ?',
+                        confirmLabel: 'Supprimer',
+                      })
+                      if (ok) removeComment.mutate(comment.id)
                     }}
                   >
                     <Trash2 className="h-3.5 w-3.5" />

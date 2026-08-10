@@ -26,23 +26,15 @@ class TemporaryPasswordNotification extends Notification
         $loginUrl = rtrim((string) config('app.frontend_url'), '/').'/login';
         $isReset = $this->reason === 'reset';
 
-        $message = (new MailMessage)
+        return (new MailMessage)
             ->subject($isReset
                 ? 'FileBox — nouveau mot de passe temporaire'
-                : 'Bienvenue sur FileBox — votre mot de passe temporaire')
-            ->greeting('Bonjour '.$notifiable->name.',');
-
-        if ($isReset) {
-            $message->line('Votre mot de passe FileBox a été réinitialisé par un administrateur.');
-        } else {
-            $message->line('Un compte FileBox a été créé pour vous.');
-        }
-
-        return $message
-            ->line('Identifiant : '.$notifiable->email)
-            ->line('Mot de passe temporaire : '.$this->temporaryPassword)
-            ->line('Vous devrez changer ce mot de passe lors de votre première connexion.')
-            ->action('Se connecter', $loginUrl)
-            ->salutation('L\'équipe FileBox');
+                : 'Bienvenue sur FileBox — votre accès')
+            ->view('emails.temporary-password', [
+                'user' => $notifiable,
+                'temporaryPassword' => $this->temporaryPassword,
+                'reason' => $this->reason,
+                'loginUrl' => $loginUrl,
+            ]);
     }
 }

@@ -3,12 +3,13 @@
 namespace App\Services\Access;
 
 use App\Enums\AccessAbility;
+use App\Events\Access\AccessGranted;
+use App\Events\Access\AccessRevoked;
 use App\Models\Access;
 use App\Models\Document;
 use App\Models\Folder;
 use App\Models\User;
-use App\Notifications\AccessGrantedNotification;
-use App\Services\ActivityLog\ActivityLogService;
+use App\Notifications\AccessExpiringNotification;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
@@ -25,10 +26,6 @@ class AccessService
         'download' => ['view', 'download'],
         'view' => ['view'],
     ];
-
-    public function __construct(
-        private readonly ActivityLogService $activityLog,
-    ) {}
 
     /**
      * @param  array{user_id: int, abilities: array<int, string>, starts_at?: string|null, ends_at?: string|null}  $data
@@ -49,6 +46,7 @@ class AccessService
 
         $abilities = array_values(array_unique($data['abilities']));
         $this->assertValidAbilities($abilities);
+        $this->assertGrantorCanGrant($grantor, $accessible);
 
         if (! empty($data['starts_at']) && ! empty($data['ends_at'])
             && $data['ends_at'] < $data['starts_at']) {
@@ -69,33 +67,105 @@ class AccessService
                     'starts_at' => $data['starts_at'] ?? null,
                     'ends_at' => $data['ends_at'] ?? null,
                     'granted_by' => $grantor->id,
+                    'expiry_notified_at' => null,
                 ]
             );
         });
 
         $access->load(['user', 'grantor', 'accessible']);
-        $access->user->notify(new AccessGrantedNotification($access));
-
-        $this->activityLog->log(
-            action: 'access.granted',
-            user: $grantor,
-            subject: $access,
-            description: "Accès accordé à {$access->user->email} sur {$accessible->getMorphClass()}#{$accessible->getKey()}",
-            properties: ['abilities' => $abilities, 'user_id' => $access->user_id],
-        );
+        event(new AccessGranted($access, $grantor, $accessible));
 
         return $access;
     }
 
+    /**
+     * Accorde le même accès à plusieurs utilisateurs.
+     *
+     * @param  array{user_ids?: array<int>, user_id?: int, abilities: array<int, string>, starts_at?: string|null, ends_at?: string|null}  $data
+     * @return array<int, Access>
+     */
+    public function grantMany(User $grantor, Model $accessible, array $data): array
+    {
+        $userIds = array_values(array_unique(array_map(
+            'intval',
+            $data['user_ids'] ?? (isset($data['user_id']) ? [$data['user_id']] : []),
+        )));
+
+        if ($userIds === []) {
+            throw ValidationException::withMessages([
+                'user_ids' => ['Sélectionnez au moins un utilisateur.'],
+            ]);
+        }
+
+        $accesses = [];
+        foreach ($userIds as $userId) {
+            $accesses[] = $this->grant($grantor, $accessible, [
+                ...$data,
+                'user_id' => $userId,
+            ]);
+        }
+
+        return $accesses;
+    }
+
+    public function revokeExpired(): int
+    {
+        $now = now();
+        $count = 0;
+
+        Access::query()
+            ->whereNotNull('ends_at')
+            ->where('ends_at', '<', $now)
+            ->orderBy('id')
+            ->chunkById(200, function (Collection $batch) use (&$count): void {
+                foreach ($batch as $access) {
+                    $this->revoke($access);
+                    $count++;
+                }
+            });
+
+        return $count;
+    }
+
     public function revoke(Access $access): void
     {
-        $this->activityLog->log(
-            action: 'access.revoked',
-            subject: $access,
-            description: "Accès révoqué (user #{$access->user_id} sur {$access->accessible_type}#{$access->accessible_id})",
-        );
+        $access->loadMissing(['user', 'accessible']);
+
+        event(new AccessRevoked($access));
 
         $access->delete();
+    }
+
+    /**
+     * Notifie les accès qui expirent dans les 24h (une seule fois).
+     */
+    public function notifyUpcomingExpirations(): int
+    {
+        $count = 0;
+        $now = now();
+        $horizon = $now->copy()->addDay();
+
+        Access::query()
+            ->whereNotNull('ends_at')
+            ->whereNull('expiry_notified_at')
+            ->where('ends_at', '>', $now)
+            ->where('ends_at', '<=', $horizon)
+            ->with(['user', 'accessible'])
+            ->orderBy('id')
+            ->chunkById(200, function (Collection $batch) use (&$count): void {
+                foreach ($batch as $access) {
+                    if (! $access->user) {
+                        continue;
+                    }
+
+                    $access->user->notify(new AccessExpiringNotification($access));
+                    $access->expiry_notified_at = now();
+                    $access->save();
+                    $count++;
+                }
+            });
+
+        return $count;
     }
 
     /**
@@ -115,6 +185,7 @@ class AccessService
 
         if (array_key_exists('ends_at', $data)) {
             $access->ends_at = $data['ends_at'];
+            $access->expiry_notified_at = null;
         }
 
         if ($access->starts_at && $access->ends_at && $access->ends_at->lt($access->starts_at)) {
@@ -326,5 +397,36 @@ class AccessService
                 ]);
             }
         }
+    }
+
+    private function assertGrantorCanGrant(User $grantor, Model $accessible): void
+    {
+        if ($grantor->hasPermission('accesses.manage')) {
+            return;
+        }
+
+        if ($accessible instanceof Document) {
+            if ($accessible->owner_id === $grantor->id || $accessible->author_id === $grantor->id) {
+                return;
+            }
+
+            if ($this->userCan($grantor, $accessible, 'share') || $this->userCan($grantor, $accessible, 'manage')) {
+                return;
+            }
+        }
+
+        if ($accessible instanceof Folder) {
+            if ($accessible->created_by === $grantor->id) {
+                return;
+            }
+
+            if ($this->userCan($grantor, $accessible, 'share') || $this->userCan($grantor, $accessible, 'manage')) {
+                return;
+            }
+        }
+
+        throw ValidationException::withMessages([
+            'accessible' => ['Vous ne pouvez partager que les ressources sur lesquelles vous avez le droit de partage.'],
+        ]);
     }
 }

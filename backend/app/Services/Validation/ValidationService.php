@@ -4,28 +4,41 @@ namespace App\Services\Validation;
 
 use App\Enums\DocumentStatus;
 use App\Enums\ValidationStatus;
+use App\Events\Validation\ValidationActionTaken;
 use App\Models\Document;
 use App\Models\User;
 use App\Models\Validation;
 use App\Models\Workflow;
-use App\Notifications\ValidationActionNotification;
-use App\Services\ActivityLog\ActivityLogService;
+use App\Support\DocumentWorkflow;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Notification;
 use Illuminate\Validation\ValidationException;
 
 class ValidationService
 {
-    public function __construct(
-        private readonly ActivityLogService $activityLog,
-    ) {}
-
     /**
      * Associe un workflow au document et crée les validations (une par étape).
+     *
+     * @param  array<int, array{workflow_step_id: int, amount: int, unit: string}>  $deadlines
      */
-    public function start(Document $document, Workflow $workflow): Document
-    {
+    public function start(
+        Document $document,
+        Workflow $workflow,
+        ?int $workflowOverrideId = null,
+        array $deadlines = [],
+    ): Document {
+        if (DocumentWorkflow::isPersonal($document)) {
+            throw ValidationException::withMessages([
+                'document' => ['Les documents personnels ne peuvent pas entrer en workflow de validation.'],
+            ]);
+        }
+
+        if (! DocumentWorkflow::canStartValidation($document)) {
+            throw ValidationException::withMessages([
+                'document' => ['Ce document ne peut pas démarrer un workflow dans son état actuel.'],
+            ]);
+        }
+
         if (! $workflow->is_active) {
             throw ValidationException::withMessages([
                 'workflow' => ['Ce workflow est inactif.'],
@@ -52,20 +65,29 @@ class ValidationService
             ]);
         }
 
-        return DB::transaction(function () use ($document, $workflow) {
+        $slaByStep = $this->normalizeDeadlines($deadlines, $workflow);
+
+        return DB::transaction(function () use ($document, $workflow, $workflowOverrideId, $slaByStep) {
             $document->validations()->delete();
 
-            $document->workflow_id = $workflow->id;
+            $document->workflow_id = $workflowOverrideId ?? $workflow->id;
             $document->status = DocumentStatus::InValidation;
             $document->save();
 
             $firstValidation = null;
+            $ordered = $workflow->steps->sortBy('step_order')->values();
 
-            foreach ($workflow->steps as $step) {
+            foreach ($ordered as $index => $step) {
+                $slaHours = $slaByStep[$step->id] ?? null;
                 $validation = Validation::query()->create([
                     'document_id' => $document->id,
                     'workflow_step_id' => $step->id,
                     'status' => ValidationStatus::Pending,
+                    'sla_hours' => $slaHours,
+                    // Délai actif uniquement sur la première étape ; les suivantes au passage
+                    'due_at' => $index === 0 && $slaHours !== null
+                        ? now()->addHours($slaHours)
+                        : null,
                 ]);
 
                 $firstValidation ??= $validation;
@@ -74,18 +96,57 @@ class ValidationService
             $loaded = $this->loadDocument($document);
 
             if ($firstValidation) {
-                $this->notifyStakeholders($loaded, $firstValidation, 'started', excludeUserId: null);
+                event(new ValidationActionTaken(
+                    activityAction: 'validation.started',
+                    document: $loaded,
+                    validation: $firstValidation,
+                    notificationAction: 'started',
+                    description: "Workflow démarré sur {$loaded->reference}",
+                    properties: ['workflow_id' => $workflow->id],
+                ));
             }
-
-            $this->activityLog->log(
-                action: 'validation.started',
-                subject: $loaded,
-                description: "Workflow démarré sur {$loaded->reference}",
-                properties: ['workflow_id' => $workflow->id],
-            );
 
             return $loaded;
         });
+    }
+
+    /**
+     * @param  array<int, array{workflow_step_id: int, amount: int, unit: string}>  $deadlines
+     * @return array<int, int> step_id => sla_hours
+     */
+    private function normalizeDeadlines(array $deadlines, Workflow $workflow): array
+    {
+        if ($deadlines === []) {
+            return [];
+        }
+
+        $stepIds = $workflow->steps->pluck('id')->all();
+        $map = [];
+
+        foreach ($deadlines as $row) {
+            $stepId = (int) $row['workflow_step_id'];
+            if (! in_array($stepId, $stepIds, true)) {
+                throw ValidationException::withMessages([
+                    'deadlines' => ["L'étape #{$stepId} n'appartient pas au workflow choisi."],
+                ]);
+            }
+
+            $amount = (int) $row['amount'];
+            $unit = $row['unit'];
+            $map[$stepId] = $unit === 'days' ? $amount * 24 : $amount;
+        }
+
+        return $map;
+    }
+
+    private function activateDueAt(Validation $validation): void
+    {
+        if ($validation->sla_hours === null || $validation->due_at !== null) {
+            return;
+        }
+
+        $validation->due_at = now()->addHours($validation->sla_hours);
+        $validation->save();
     }
 
     public function listForDocument(Document $document): Collection
@@ -115,17 +176,23 @@ class ValidationService
             if ($this->allMandatoryApproved($document)) {
                 $document->status = DocumentStatus::Validated;
                 $document->save();
+            } else {
+                $next = $this->currentPending($document);
+                if ($next) {
+                    $this->activateDueAt($next);
+                }
             }
 
             $loaded = $this->loadDocument($document);
-            $this->notifyStakeholders($loaded, $validation, 'approved', $actor->id);
-
-            $this->activityLog->log(
-                action: 'validation.approved',
-                user: $actor,
-                subject: $loaded,
+            event(new ValidationActionTaken(
+                activityAction: 'validation.approved',
+                document: $loaded,
+                validation: $validation,
+                notificationAction: 'approved',
+                actor: $actor,
+                excludeUserId: $actor->id,
                 description: "Étape approuvée sur {$loaded->reference}",
-            );
+            ));
 
             return $loaded;
         });
@@ -148,14 +215,15 @@ class ValidationService
             $document->save();
 
             $loaded = $this->loadDocument($document);
-            $this->notifyStakeholders($loaded, $validation, 'rejected', $actor->id);
-
-            $this->activityLog->log(
-                action: 'validation.rejected',
-                user: $actor,
-                subject: $loaded,
+            event(new ValidationActionTaken(
+                activityAction: 'validation.rejected',
+                document: $loaded,
+                validation: $validation,
+                notificationAction: 'rejected',
+                actor: $actor,
+                excludeUserId: $actor->id,
                 description: "Document rejeté : {$loaded->reference}",
-            );
+            ));
 
             return $loaded;
         });
@@ -178,14 +246,15 @@ class ValidationService
             $document->save();
 
             $loaded = $this->loadDocument($document);
-            $this->notifyStakeholders($loaded, $validation, 'correction_requested', $actor->id);
-
-            $this->activityLog->log(
-                action: 'validation.correction_requested',
-                user: $actor,
-                subject: $loaded,
+            event(new ValidationActionTaken(
+                activityAction: 'validation.correction_requested',
+                document: $loaded,
+                validation: $validation,
+                notificationAction: 'correction_requested',
+                actor: $actor,
+                excludeUserId: $actor->id,
                 description: "Correction demandée sur {$loaded->reference}",
-            );
+            ));
 
             return $loaded;
         });
@@ -202,19 +271,17 @@ class ValidationService
             ]);
         }
 
-        $workflow = Workflow::query()->findOrFail($document->workflow_id);
-
-        // Remet le document hors "en_validation" pour permettre start()
         if ($document->status === DocumentStatus::InValidation) {
             throw ValidationException::withMessages([
                 'document' => ['Le document est déjà en validation.'],
             ]);
         }
 
+        $document->validations()->delete();
         $document->status = DocumentStatus::Draft;
         $document->save();
 
-        return $this->start($document, $workflow);
+        return $this->loadDocument($document);
     }
 
     public function currentPending(Document $document): ?Validation
@@ -247,19 +314,17 @@ class ValidationService
 
         $step = $validation->workflowStep()->firstOrFail();
 
-        if ($actor->hasPermission('workflows.manage')) {
+        // Superviseurs (admin, direction, responsables métier)
+        if ($actor->hasPermission('workflows.manage') || $actor->hasPermission('validations.act')) {
             return;
         }
 
+        // Qui de droit : responsable nommé sur l'étape (même sans permission globale)
         if ($step->responsible_user_id && $step->responsible_user_id === $actor->id) {
             return;
         }
 
         if ($step->responsible_role_id && $actor->roles()->where('roles.id', $step->responsible_role_id)->exists()) {
-            return;
-        }
-
-        if (! $step->responsible_user_id && ! $step->responsible_role_id && $actor->hasPermission('validations.act')) {
             return;
         }
 
@@ -305,33 +370,5 @@ class ValidationService
             'validations.workflowStep',
             'validations.user',
         ]);
-    }
-
-    private function notifyStakeholders(
-        Document $document,
-        Validation $validation,
-        string $action,
-        ?int $excludeUserId,
-    ): void {
-        $ids = collect([$document->author_id, $document->owner_id])
-            ->filter()
-            ->unique()
-            ->when($excludeUserId, fn ($c) => $c->reject(fn ($id) => $id === $excludeUserId));
-
-        $step = $validation->workflowStep;
-        if ($step?->responsible_user_id) {
-            $ids->push($step->responsible_user_id);
-        }
-
-        $ids = $ids->unique()->filter()->values();
-
-        if ($ids->isEmpty()) {
-            return;
-        }
-
-        Notification::send(
-            User::query()->whereIn('id', $ids)->get(),
-            new ValidationActionNotification($document, $validation->fresh(), $action)
-        );
     }
 }

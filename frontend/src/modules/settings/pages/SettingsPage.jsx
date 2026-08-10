@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Save } from 'lucide-react'
 import { toast } from 'sonner'
@@ -17,7 +17,7 @@ import { settingsApi } from '@/modules/settings/api'
 
 export default function SettingsPage() {
   const queryClient = useQueryClient()
-  const [values, setValues] = useState({})
+  const [overrides, setOverrides] = useState({})
 
   const { data, isLoading } = useQuery({
     queryKey: queryKeys.settings,
@@ -26,21 +26,15 @@ export default function SettingsPage() {
 
   const settings = unwrapList(data)
 
-  useEffect(() => {
-    if (settings.length === 0) return
-    const map = {}
-    settings.forEach((s) => {
-      map[s.key] = s.value ?? ''
-    })
-    setValues(map)
-  }, [data])
+  const valueFor = (setting) =>
+    setting.key in overrides ? overrides[setting.key] : (setting.value ?? '')
 
   const saveBulk = useMutation({
     mutationFn: () => {
       const payload = {}
       settings.forEach((s) => {
         payload[s.key] = {
-          value: values[s.key],
+          value: valueFor(s),
           type: s.type,
           description: s.description,
         }
@@ -58,7 +52,7 @@ export default function SettingsPage() {
     <RequirePermission permission="settings.manage">
       <PageHeader
         title="Paramètres système"
-        description="Configuration FileBox (API /settings)."
+        description="Configuration générale de la plateforme."
         actions={
           <Button size="sm" onClick={() => saveBulk.mutate()} disabled={saveBulk.isPending}>
             <Save className="h-4 w-4" />
@@ -70,7 +64,7 @@ export default function SettingsPage() {
       {isLoading ? (
         <LoadingScreen />
       ) : settings.length === 0 ? (
-        <EmptyState title="Aucun paramètre" description="Lancez le seeder SystemSettingSeeder." />
+        <EmptyState title="Aucun paramètre" description="Aucun paramètre système n'est encore configuré." />
       ) : (
         <div className="grid gap-3">
           {settings.map((setting) => (
@@ -84,10 +78,10 @@ export default function SettingsPage() {
                   <input
                     id={setting.key}
                     type="checkbox"
-                    checked={values[setting.key] === '1' || values[setting.key] === true}
+                    checked={valueFor(setting) === '1' || valueFor(setting) === true}
                     onChange={(e) =>
-                      setValues({
-                        ...values,
+                      setOverrides({
+                        ...overrides,
                         [setting.key]: e.target.checked ? '1' : '0',
                       })
                     }
@@ -98,8 +92,10 @@ export default function SettingsPage() {
                 <Input
                   id={setting.key}
                   type={setting.type === 'integer' ? 'number' : 'text'}
-                  value={values[setting.key] ?? ''}
-                  onChange={(e) => setValues({ ...values, [setting.key]: e.target.value })}
+                  value={valueFor(setting)}
+                  onChange={(e) =>
+                    setOverrides({ ...overrides, [setting.key]: e.target.value })
+                  }
                 />
               )}
             </Card>

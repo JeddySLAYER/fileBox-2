@@ -46,7 +46,7 @@ export default function NotificationsPage() {
     <>
       <PageHeader
         title="Notifications"
-        description="Alertes partage, commentaires et validations."
+        description="Alertes importantes : accès, validations, échéances, commentaires et publications."
         actions={
           unread > 0 ? (
             <Button size="sm" variant="secondary" onClick={() => markAll.mutate()}>

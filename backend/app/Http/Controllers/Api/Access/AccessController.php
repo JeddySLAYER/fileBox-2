@@ -52,15 +52,20 @@ class AccessController extends Controller
     {
         $this->authorize('share', $document);
 
-        $access = $this->accessService->grant(
+        $accesses = $this->accessService->grantMany(
             $request->user(),
             $document,
             $request->validated(),
         );
 
+        $count = count($accesses);
+
         return response()->json([
-            'message' => 'Accès accordé sur le document.',
-            'access' => new AccessResource($access),
+            'message' => $count > 1
+                ? "Accès accordé à {$count} utilisateurs."
+                : 'Accès accordé sur le document.',
+            'access' => new AccessResource($accesses[0]),
+            'accesses' => AccessResource::collection(collect($accesses)),
         ], 201);
     }
 
@@ -68,15 +73,20 @@ class AccessController extends Controller
     {
         $this->authorize('share', $folder);
 
-        $access = $this->accessService->grant(
+        $accesses = $this->accessService->grantMany(
             $request->user(),
             $folder,
             $request->validated(),
         );
 
+        $count = count($accesses);
+
         return response()->json([
-            'message' => 'Accès accordé sur le dossier (hérité par sous-dossiers et documents).',
-            'access' => new AccessResource($access),
+            'message' => $count > 1
+                ? "Accès accordé à {$count} utilisateurs (héritage dossiers/documents)."
+                : 'Accès accordé sur le dossier (hérité par sous-dossiers et documents).',
+            'access' => new AccessResource($accesses[0]),
+            'accesses' => AccessResource::collection(collect($accesses)),
         ], 201);
     }
 

@@ -56,6 +56,37 @@ test('un admin peut synchroniser les permissions d un rôle', function () {
         ->assertJsonCount(1, 'role.permissions');
 });
 
+test('un admin peut modifier un rôle custom', function () {
+    Sanctum::actingAs(adminUser());
+
+    $role = Role::query()->create([
+        'name' => 'Auditeur',
+        'slug' => 'auditeur',
+        'description' => 'Avant',
+    ]);
+
+    $this->putJson("/api/roles/{$role->id}", [
+        'name' => 'Auditeur senior',
+        'description' => 'Après',
+    ])->assertOk()
+        ->assertJsonPath('role.name', 'Auditeur senior')
+        ->assertJsonPath('role.description', 'Après');
+});
+
+test('un admin peut supprimer un rôle custom sans utilisateurs', function () {
+    Sanctum::actingAs(adminUser());
+
+    $role = Role::query()->create([
+        'name' => 'Temporaire',
+        'slug' => 'temporaire-delete',
+    ]);
+
+    $this->deleteJson("/api/roles/{$role->id}")
+        ->assertOk();
+
+    expect(Role::query()->whereKey($role->id)->exists())->toBeFalse();
+});
+
 test('un collaborateur ne peut pas gérer les rôles', function () {
     Sanctum::actingAs(collaboratorUser());
 

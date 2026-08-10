@@ -13,10 +13,18 @@ use Illuminate\Database\Eloquent\SoftDeletes;
     'slug',
     'description',
     'default_workflow_id',
+    'requires_workflow',
 ])]
 class DocumentType extends Model
 {
     use SoftDeletes;
+
+    protected function casts(): array
+    {
+        return [
+            'requires_workflow' => 'boolean',
+        ];
+    }
 
     public function defaultWorkflow(): BelongsTo
     {

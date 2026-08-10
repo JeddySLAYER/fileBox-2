@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\MorphTo;
     'abilities',
     'starts_at',
     'ends_at',
+    'expiry_notified_at',
     'granted_by',
 ])]
 class Access extends Model
@@ -25,6 +26,7 @@ class Access extends Model
             'abilities' => 'array',
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
+            'expiry_notified_at' => 'datetime',
         ];
     }
 

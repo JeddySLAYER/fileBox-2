@@ -19,9 +19,9 @@ export const queryKeys = {
   folders: (filters) => ['folders', filters],
   folderTree: (filters) => ['folders', 'tree', filters],
   search: (filters) => ['search', filters],
+  favorites: ['favorites'],
   notifications: (filters) => ['notifications', filters],
   unreadNotifications: ['notifications', 'unread-count'],
-  // Placeholders modules suivants / OCR-IA
   users: (filters) => ['users', filters],
   user: (id) => ['users', id],
   roles: ['roles'],

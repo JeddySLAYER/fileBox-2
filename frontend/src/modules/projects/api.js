@@ -8,4 +8,6 @@ export const projectsApi = {
   remove: (id) => api.delete(`/projects/${id}`).then((r) => r.data),
   syncMembers: (id, memberIds) =>
     api.put(`/projects/${id}/members`, { member_ids: memberIds }).then((r) => r.data),
+  memberCandidates: (id) =>
+    api.get(`/projects/${id}/member-candidates`).then((r) => r.data.data ?? r.data),
 }

@@ -18,6 +18,7 @@ class RoleResource extends JsonResource
             'name' => $this->name,
             'slug' => $this->slug,
             'description' => $this->description,
+            'is_protected' => in_array($this->slug, ['administrateur', 'collaborateur', 'invite'], true),
             'permissions' => $this->whenLoaded('permissions', fn () => $this->permissions->map(fn ($p) => [
                 'id' => $p->id,
                 'name' => $p->name,

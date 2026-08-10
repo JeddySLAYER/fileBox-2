@@ -16,6 +16,11 @@ class ValidationResource extends JsonResource
             'document_id' => $this->document_id,
             'status' => $this->status?->value ?? $this->status,
             'comment' => $this->comment,
+            'sla_hours' => $this->sla_hours,
+            'due_at' => $this->due_at,
+            'is_overdue' => $this->due_at !== null
+                && $this->status?->value === 'en_attente'
+                && $this->due_at->isPast(),
             'validated_at' => $this->validated_at,
             'workflow_step' => $this->whenLoaded('workflowStep', fn () => new WorkflowStepResource($this->workflowStep)),
             'user' => $this->whenLoaded('user', fn () => $this->user ? [

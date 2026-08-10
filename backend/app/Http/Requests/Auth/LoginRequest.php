@@ -46,7 +46,7 @@ class LoginRequest extends FormRequest
             RateLimiter::hit($this->throttleKey());
 
             throw ValidationException::withMessages([
-                'email' => __('auth.failed'),
+                'email' => 'Identifiants incorrects.',
             ]);
         }
 
@@ -68,11 +68,10 @@ class LoginRequest extends FormRequest
 
         $seconds = RateLimiter::availableIn($this->throttleKey());
 
+        $minutes = max(1, (int) ceil($seconds / 60));
+
         throw ValidationException::withMessages([
-            'email' => trans('auth.throttle', [
-                'seconds' => $seconds,
-                'minutes' => ceil($seconds / 60),
-            ]),
+            'email' => "Trop de tentatives de connexion. Réessayez dans {$minutes} minute(s).",
         ]);
     }
 

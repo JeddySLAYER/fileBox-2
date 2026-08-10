@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api\Validation;
 
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Validation\ActOnValidationRequest;
+use App\Http\Requests\Validation\RejectValidationRequest;
 use App\Http\Requests\Validation\StartWorkflowRequest;
 use App\Http\Resources\DocumentResource;
 use App\Http\Resources\ValidationResource;
@@ -13,6 +14,7 @@ use App\Models\Workflow;
 use App\Services\Validation\ValidationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
+use Illuminate\Validation\ValidationException;
 
 class ValidationController extends Controller
 {
@@ -31,10 +33,22 @@ class ValidationController extends Controller
 
     public function start(StartWorkflowRequest $request, Document $document): JsonResponse
     {
-        $this->authorize('update', $document);
+        $this->authorize('startWorkflow', $document);
 
-        $workflow = Workflow::query()->findOrFail($request->integer('workflow_id'));
-        $document = $this->validationService->start($document, $workflow);
+        $workflowId = $request->integer('workflow_id') ?: $document->workflow_id;
+        if (! $workflowId) {
+            throw ValidationException::withMessages([
+                'workflow_id' => ['Aucun workflow n\'est associé à ce document.'],
+            ]);
+        }
+
+        $workflow = Workflow::query()->findOrFail($workflowId);
+        $document = $this->validationService->start(
+            $document,
+            $workflow,
+            $request->filled('workflow_id') ? $workflowId : null,
+            $request->validated('deadlines') ?? [],
+        );
 
         $current = $this->validationService->currentPending($document);
         $current?->load([
@@ -52,12 +66,12 @@ class ValidationController extends Controller
 
     public function restart(Document $document): JsonResponse
     {
-        $this->authorize('update', $document);
+        $this->authorize('resetWorkflow', $document);
 
         $document = $this->validationService->restart($document);
 
         return response()->json([
-            'message' => 'Workflow relancé après correction.',
+            'message' => 'Workflow réinitialisé. Le document doit être reproposé avant une nouvelle validation.',
             'document' => new DocumentResource($document),
         ]);
     }
@@ -78,7 +92,7 @@ class ValidationController extends Controller
         ]);
     }
 
-    public function reject(ActOnValidationRequest $request, Validation $validation): JsonResponse
+    public function reject(RejectValidationRequest $request, Validation $validation): JsonResponse
     {
         $this->authorize('act', $validation);
 

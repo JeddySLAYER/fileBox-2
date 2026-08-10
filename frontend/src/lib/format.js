@@ -18,6 +18,7 @@ export function formatBytes(bytes) {
 
 export const documentStatusLabels = {
   brouillon: 'Brouillon',
+  propose: 'Proposé',
   en_validation: 'En validation',
   valide: 'Validé',
   publie: 'Publié',

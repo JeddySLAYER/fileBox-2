@@ -18,6 +18,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'checksum',
     'created_by',
     'change_summary',
+    'is_locked',
     'ocr_text',
 ])]
 class Version extends Model
@@ -28,6 +29,7 @@ class Version extends Model
             'size' => 'integer',
             'page_count' => 'integer',
             'version_number' => 'integer',
+            'is_locked' => 'boolean',
         ];
     }
 

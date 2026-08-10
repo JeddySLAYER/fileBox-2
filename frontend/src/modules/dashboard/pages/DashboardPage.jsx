@@ -1,6 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { FileText, FolderOpen, Users, GitPullRequest, Briefcase } from 'lucide-react'
+import {
+  AlertTriangle,
+  FileText,
+  FolderOpen,
+  GitPullRequest,
+  MessageSquare,
+  Share2,
+  Star,
+  Users,
+  Archive,
+} from 'lucide-react'
 import Badge from '@/components/ui/Badge'
 import Card from '@/components/ui/Card'
 import EmptyState from '@/components/ui/EmptyState'
@@ -12,11 +22,62 @@ import { dashboardApi } from '@/modules/dashboard/api'
 import { useAuthStore } from '@/stores/authStore'
 
 function statusTone(status) {
-  if (status === 'valide') return 'success'
-  if (status === 'en_validation') return 'warning'
+  if (status === 'valide' || status === 'publie') return 'success'
+  if (status === 'en_validation' || status === 'propose') return 'warning'
   if (status === 'rejete') return 'danger'
   if (status === 'archive') return 'neutral'
   return 'primary'
+}
+
+function DocLink({ doc }) {
+  if (!doc) return null
+  return (
+    <Link to={`/documents/${doc.id}`} className="truncate text-sm font-medium hover:text-primary">
+      {doc.title}
+    </Link>
+  )
+}
+
+function ValidationRow({ item }) {
+  return (
+    <li className="flex items-center justify-between gap-3 py-3">
+      <div className="min-w-0">
+        <DocLink doc={item.document} />
+        <p className="truncate text-xs text-muted-foreground">
+          {item.document?.reference}
+          {item.workflow_step
+            ? ` · Étape ${item.workflow_step.step_order} — ${item.workflow_step.name}`
+            : ''}
+        </p>
+      </div>
+      <Badge tone="warning">En attente</Badge>
+    </li>
+  )
+}
+
+function FavoriteRow({ fav }) {
+  if (fav.document) {
+    return (
+      <li className="py-3">
+        <DocLink doc={fav.document} />
+        <p className="truncate text-xs text-muted-foreground">{fav.document.reference}</p>
+      </li>
+    )
+  }
+  if (fav.folder) {
+    return (
+      <li className="py-3">
+        <Link
+          to={`/explorer?folder=${fav.folder.id}`}
+          className="text-sm font-medium hover:text-primary"
+        >
+          {fav.folder.name}
+        </Link>
+        <p className="text-xs text-muted-foreground">Dossier</p>
+      </li>
+    )
+  }
+  return null
 }
 
 function HomeDashboard({ data }) {
@@ -31,7 +92,11 @@ function HomeDashboard({ data }) {
         {[
           { label: 'Documents', value: data.counts?.documents ?? 0, icon: FileText },
           { label: 'Dossiers', value: data.counts?.folders ?? 0, icon: FolderOpen },
-          { label: 'Projets', value: data.counts?.projects ?? 0, icon: Briefcase },
+          {
+            label: 'À valider',
+            value: data.counts?.validations_pending ?? 0,
+            icon: GitPullRequest,
+          },
         ].map((stat) => {
           const Icon = stat.icon
           return (
@@ -46,6 +111,107 @@ function HomeDashboard({ data }) {
             </Card>
           )
         })}
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-2">
+        <Card>
+          <h2 className="text-sm font-semibold">À valider par moi</h2>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.pending_validations ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Rien en attente.</li>
+            ) : (
+              data.pending_validations.map((v) => <ValidationRow key={v.id} item={v} />)
+            )}
+          </ul>
+        </Card>
+
+        <Card>
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">À reprendre</h2>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Rejetés ou corrections demandées — corrigez puis reproposez / relancez le workflow.
+          </p>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.needs_attention ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun document à reprendre.</li>
+            ) : (
+              data.needs_attention.map((doc) => (
+                <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <DocLink doc={doc} />
+                    <p className="truncate text-xs text-muted-foreground">
+                      {doc.reference} · {doc.folder?.name ?? '—'}
+                    </p>
+                  </div>
+                  <Badge tone={statusTone(doc.status)}>{statusLabel(doc.status)}</Badge>
+                </li>
+              ))
+            )}
+          </ul>
+        </Card>
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        <Card>
+          <div className="flex items-center gap-2">
+            <Share2 className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Partagés avec moi</h2>
+          </div>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.shared_documents ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun partage.</li>
+            ) : (
+              data.shared_documents.map((doc) => (
+                <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <DocLink doc={doc} />
+                    <p className="truncate text-xs text-muted-foreground">
+                      {doc.author?.name ?? '—'}
+                    </p>
+                  </div>
+                  <Badge tone={statusTone(doc.status)}>{statusLabel(doc.status)}</Badge>
+                </li>
+              ))
+            )}
+          </ul>
+        </Card>
+
+        <Card>
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Favoris</h2>
+          </div>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.favorites ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun favori.</li>
+            ) : (
+              data.favorites.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
+            )}
+          </ul>
+        </Card>
+
+        <Card>
+          <div className="flex items-center gap-2">
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Commentaires récents</h2>
+          </div>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.recent_comments ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun commentaire.</li>
+            ) : (
+              data.recent_comments.map((c) => (
+                <li key={c.id} className="py-3">
+                  <DocLink doc={c.document} />
+                  <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                    {c.user?.name}: {c.content}
+                  </p>
+                </li>
+              ))
+            )}
+          </ul>
+        </Card>
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
@@ -63,12 +229,7 @@ function HomeDashboard({ data }) {
               data.recent_documents.map((doc) => (
                 <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
-                    <Link
-                      to={`/documents/${doc.id}`}
-                      className="truncate text-sm font-medium hover:text-primary"
-                    >
-                      {doc.title}
-                    </Link>
+                    <DocLink doc={doc} />
                     <p className="truncate text-xs text-muted-foreground">
                       {doc.reference} · {doc.folder?.name ?? 'Sans dossier'}
                     </p>
@@ -145,9 +306,14 @@ export default function DashboardPage() {
 
   const stats = [
     { label: 'Documents', value: data.counts.documents, icon: FileText },
-    { label: 'Dossiers', value: data.counts.folders, icon: FolderOpen },
+    { label: 'Archivés', value: data.counts.documents_archived ?? 0, icon: Archive },
     { label: 'Utilisateurs', value: data.counts.users_active, icon: Users },
     { label: 'Validations', value: data.counts.validations_pending, icon: GitPullRequest },
+    {
+      label: 'En retard',
+      value: data.counts.validations_blocked ?? 0,
+      icon: AlertTriangle,
+    },
   ]
 
   return (
@@ -157,7 +323,7 @@ export default function DashboardPage() {
         description={data.scope?.label ?? "Vue d'ensemble de l'activité documentaire."}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {stats.map((stat) => {
           const Icon = stat.icon
           return (
@@ -176,6 +342,37 @@ export default function DashboardPage() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Card>
+          <h2 className="text-sm font-semibold">Validations en attente</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Ouvrez le document pour approuver, demander une correction ou rejeter (commentaire
+            obligatoire).
+          </p>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.pending_validations ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucune validation en attente.</li>
+            ) : (
+              data.pending_validations.map((v) => <ValidationRow key={v.id} item={v} />)
+            )}
+          </ul>
+        </Card>
+
+        <Card>
+          <h2 className="text-sm font-semibold">Workflows bloqués</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Étapes en attente dont l&apos;échéance est dépassée (ou &gt; 7 j sans délai fixé).
+          </p>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.blocked_validations ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun blocage détecté.</li>
+            ) : (
+              data.blocked_validations.map((v) => <ValidationRow key={v.id} item={v} />)
+            )}
+          </ul>
+        </Card>
+      </div>
+
+      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+        <Card>
           <h2 className="text-sm font-semibold">Documents récents</h2>
           <ul className="mt-4 divide-y divide-border">
             {(data.recent_documents ?? []).length === 0 ? (
@@ -184,12 +381,7 @@ export default function DashboardPage() {
               data.recent_documents.map((doc) => (
                 <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
-                    <Link
-                      to={`/documents/${doc.id}`}
-                      className="truncate text-sm font-medium hover:text-primary"
-                    >
-                      {doc.title}
-                    </Link>
+                    <DocLink doc={doc} />
                     <p className="truncate text-xs text-muted-foreground">
                       {doc.reference} · {doc.folder?.name ?? 'Sans dossier'}
                     </p>
@@ -215,6 +407,20 @@ export default function DashboardPage() {
                   </p>
                 </li>
               ))
+            )}
+          </ul>
+        </Card>
+
+        <Card>
+          <div className="flex items-center gap-2">
+            <Star className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">Favoris</h2>
+          </div>
+          <ul className="mt-4 divide-y divide-border">
+            {(data.favorites ?? []).length === 0 ? (
+              <li className="py-6 text-sm text-muted-foreground">Aucun favori.</li>
+            ) : (
+              data.favorites.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
             )}
           </ul>
         </Card>

@@ -35,4 +35,12 @@ return [
         ],
     ],
 
+    'gemini' => [
+        'api_key' => env('GEMINI_API_KEY'),
+        'model' => env('GEMINI_MODEL', 'gemini-2.0-flash'),
+        'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+        // ponytail: plafond taille envoi multimodal ; upgrade: chunking / Files API Gemini
+        'max_bytes' => (int) env('GEMINI_MAX_BYTES', 12_000_000),
+    ],
+
 ];

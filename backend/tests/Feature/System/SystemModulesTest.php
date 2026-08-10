@@ -58,6 +58,7 @@ test('tableau de bord retourne les compteurs', function () {
                 'documents_by_status',
                 'recent_documents',
                 'pending_validations',
+                'blocked_validations',
                 'recent_activity',
             ],
         ]);

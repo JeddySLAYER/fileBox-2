@@ -23,11 +23,14 @@ class DocumentTypeService
      */
     public function create(array $data): DocumentType
     {
+        $data = $this->normalizeWorkflowFields($data);
+
         return DocumentType::query()->create([
             'name' => $data['name'],
             'slug' => $data['slug'] ?? Str::slug($data['name']),
             'description' => $data['description'] ?? null,
             'default_workflow_id' => $data['default_workflow_id'] ?? null,
+            'requires_workflow' => $data['requires_workflow'] ?? false,
         ])->load('defaultWorkflow')->loadCount('documents');
     }
 
@@ -36,11 +39,14 @@ class DocumentTypeService
      */
     public function update(DocumentType $type, array $data): DocumentType
     {
+        $data = $this->normalizeWorkflowFields($data, $type);
+
         $type->fill(collect($data)->only([
             'name',
             'slug',
             'description',
             'default_workflow_id',
+            'requires_workflow',
         ])->all());
         $type->save();
 
@@ -50,5 +56,12 @@ class DocumentTypeService
     public function delete(DocumentType $type): void
     {
         SoftDeleteArchive::archive($type, ['slug']);
+    }
+
+    /** @param  array<string, mixed>  $data */
+    private function normalizeWorkflowFields(array $data, ?DocumentType $existing = null): array
+    {
+        // ponytail: requires_workflow = hint only; no hard coupling to default_workflow_id
+        return $data;
     }
 }

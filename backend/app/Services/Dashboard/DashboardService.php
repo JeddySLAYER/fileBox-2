@@ -4,6 +4,9 @@ namespace App\Services\Dashboard;
 
 use App\Enums\DocumentStatus;
 use App\Enums\ValidationStatus;
+use App\Http\Resources\FavoriteResource;
+use App\Models\Access;
+use App\Models\Comment;
 use App\Models\Document;
 use App\Models\Folder;
 use App\Models\Project;
@@ -11,6 +14,7 @@ use App\Models\User;
 use App\Models\Validation;
 use App\Services\Access\AccessService;
 use App\Services\ActivityLog\ActivityLogService;
+use App\Services\Favorite\FavoriteService;
 use App\Support\ReportingScope;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
@@ -18,13 +22,17 @@ use Illuminate\Validation\ValidationException;
 
 class DashboardService
 {
+    /** ponytail: heuristique SLA sans due_at — upgrade: colonne deadline sur validations */
+    private const BLOCKED_AFTER_DAYS = 7;
+
     public function __construct(
         private readonly ActivityLogService $activityLog,
         private readonly AccessService $accessService,
+        private readonly FavoriteService $favoriteService,
     ) {}
 
     /**
-     * Accueil pour utilisateurs sans KPIs (collaborateur, invité…).
+     * Accueil collaborateur / invité : actionnable, pas de KPIs globaux.
      *
      * @return array<string, mixed>
      */
@@ -66,14 +74,116 @@ class DashboardService
                 'users' => 0,
                 'users_active' => 0,
                 'documents_trashed' => 0,
-                'validations_pending' => 0,
+                'documents_archived' => 0,
+                'validations_pending' => $this->myPendingValidationsQuery($user)->count(),
+                'validations_blocked' => 0,
             ],
             'documents_by_status' => [],
             'recent_documents' => $documents,
             'recent_folders' => $folders,
             'recent_projects' => $projects,
-            'pending_validations' => [],
+            'pending_validations' => $this->serializeValidations(
+                $this->myPendingValidationsQuery($user)->latest()->limit(8)->get()
+            ),
+            'blocked_validations' => [],
+            'shared_documents' => $this->sharedDocuments($user),
+            'needs_attention' => $this->needsAttentionDocuments($user),
+            'recent_comments' => $this->recentCommentsOnMyDocuments($user),
+            'favorites' => FavoriteResource::collection(
+                $this->favoriteService->listForUser($user)->take(8)
+            )->resolve(),
             'recent_activity' => [],
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function overview(User $user): array
+    {
+        $scope = new ReportingScope($user);
+
+        if (! $scope->canAccess()) {
+            throw ValidationException::withMessages([
+                'dashboard' => ['Vous n\'avez pas accès au tableau de bord.'],
+            ]);
+        }
+
+        $documentsByStatus = $this->scopedDocuments($scope)
+            ->select('status', DB::raw('count(*) as total'))
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        $pendingQuery = $this->scopedPendingValidations($scope);
+        // Bloqué = échéance dépassée (due_at), sinon fallback heuristique 7j sans SLA
+        $blockedQuery = (clone $pendingQuery)->where(function ($q) {
+            $q->where(function ($q) {
+                $q->whereNotNull('due_at')->where('due_at', '<', now());
+            })->orWhere(function ($q) {
+                $q->whereNull('due_at')
+                    ->where('validations.created_at', '<=', now()->subDays(self::BLOCKED_AFTER_DAYS));
+            });
+        });
+
+        return [
+            'scope' => $scope->meta(),
+            'counts' => [
+                'users' => $this->countUsers($scope),
+                'users_active' => $this->countUsers($scope, activeOnly: true),
+                'documents' => $this->scopedDocuments($scope)->count(),
+                'documents_trashed' => $this->scopedDocuments($scope, withTrashed: true)->onlyTrashed()->count(),
+                'documents_archived' => $this->scopedDocuments($scope)
+                    ->where('status', DocumentStatus::Archived->value)
+                    ->count(),
+                'folders' => $this->scopedFolders($scope)->count(),
+                'projects' => $this->countProjects($scope),
+                'validations_pending' => (clone $pendingQuery)->count(),
+                'validations_blocked' => (clone $blockedQuery)->count(),
+            ],
+            'documents_by_status' => collect(DocumentStatus::cases())
+                ->mapWithKeys(fn (DocumentStatus $status) => [
+                    $status->value => (int) ($documentsByStatus[$status->value] ?? 0),
+                ])
+                ->all(),
+            'recent_documents' => $this->scopedDocuments($scope)
+                ->with(['author:id,name', 'folder:id,name'])
+                ->latest()
+                ->limit(8)
+                ->get(['id', 'reference', 'title', 'status', 'author_id', 'folder_id', 'created_at']),
+            'pending_validations' => $this->serializeValidations(
+                (clone $pendingQuery)
+                    ->with([
+                        'document:id,reference,title,status',
+                        'workflowStep:id,name,step_order,responsible_user_id,responsible_role_id',
+                        'workflowStep.responsibleUser:id,name',
+                        'workflowStep.responsibleRole:id,name,slug',
+                    ])
+                    ->latest()
+                    ->limit(8)
+                    ->get()
+            ),
+            'blocked_validations' => $this->serializeValidations(
+                (clone $blockedQuery)
+                    ->with([
+                        'document:id,reference,title,status',
+                        'workflowStep:id,name,step_order',
+                    ])
+                    ->oldest()
+                    ->limit(8)
+                    ->get()
+            ),
+            'favorites' => FavoriteResource::collection(
+                $this->favoriteService->listForUser($user)->take(8)
+            )->resolve(),
+            'shared_documents' => [],
+            'needs_attention' => [],
+            'recent_comments' => [],
+            'recent_activity' => $this->activityLog
+                ->scopedQuery($scope)
+                ->with('user:id,name')
+                ->latest()
+                ->limit(10)
+                ->get(['id', 'user_id', 'action', 'description', 'created_at']),
         ];
     }
 
@@ -103,60 +213,120 @@ class DashboardService
         return $query;
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    public function overview(User $user): array
+    private function myPendingValidationsQuery(User $user): Builder
     {
-        $scope = new ReportingScope($user);
+        $roleIds = $user->roles()->pluck('roles.id');
 
-        if (! $scope->canAccess()) {
-            throw ValidationException::withMessages([
-                'dashboard' => ['Vous n\'avez pas accès au tableau de bord.'],
+        return Validation::query()
+            ->where('status', ValidationStatus::Pending->value)
+            ->whereHas('workflowStep', function (Builder $q) use ($user, $roleIds) {
+                $q->where(function (Builder $inner) use ($user, $roleIds) {
+                    $inner->where('responsible_user_id', $user->id);
+                    if ($roleIds->isNotEmpty()) {
+                        $inner->orWhereIn('responsible_role_id', $roleIds);
+                    }
+                });
+            })
+            ->with([
+                'document:id,reference,title,status',
+                'workflowStep:id,name,step_order,responsible_user_id,responsible_role_id',
             ]);
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function sharedDocuments(User $user): array
+    {
+        $docIds = Access::query()
+            ->active()
+            ->where('user_id', $user->id)
+            ->where('accessible_type', 'document')
+            ->pluck('accessible_id');
+
+        if ($docIds->isEmpty()) {
+            return [];
         }
 
-        $documentsByStatus = $this->scopedDocuments($scope)
-            ->select('status', DB::raw('count(*) as total'))
-            ->groupBy('status')
-            ->pluck('total', 'status');
+        return Document::query()
+            ->whereIn('id', $docIds)
+            ->with(['folder:id,name', 'author:id,name'])
+            ->latest('updated_at')
+            ->limit(8)
+            ->get(['id', 'reference', 'title', 'status', 'folder_id', 'author_id', 'updated_at'])
+            ->all();
+    }
 
-        return [
-            'scope' => $scope->meta(),
-            'counts' => [
-                'users' => $this->countUsers($scope),
-                'users_active' => $this->countUsers($scope, activeOnly: true),
-                'documents' => $this->scopedDocuments($scope)->count(),
-                'documents_trashed' => $this->scopedDocuments($scope, withTrashed: true)->onlyTrashed()->count(),
-                'folders' => $this->scopedFolders($scope)->count(),
-                'projects' => $this->countProjects($scope),
-                'validations_pending' => $this->scopedPendingValidations($scope)->count(),
-            ],
-            'documents_by_status' => collect(DocumentStatus::cases())
-                ->mapWithKeys(fn (DocumentStatus $status) => [
-                    $status->value => (int) ($documentsByStatus[$status->value] ?? 0),
-                ])
-                ->all(),
-            'recent_documents' => $this->scopedDocuments($scope)
-                ->with(['author:id,name', 'folder:id,name'])
-                ->latest()
-                ->limit(8)
-                ->get(['id', 'reference', 'title', 'status', 'author_id', 'folder_id', 'created_at']),
-            'pending_validations' => $this->scopedPendingValidations($scope)
-                ->with([
-                    'document:id,reference,title,status',
-                    'workflowStep:id,name,step_order',
-                ])
-                ->latest()
-                ->limit(8)
-                ->get(),
-            'recent_activity' => $this->activityLog
-                ->scopedQuery($scope)
-                ->with('user:id,name')
-                ->latest()
-                ->limit(10)
-                ->get(['id', 'user_id', 'action', 'description', 'created_at']),
-        ];
+    /** @return list<Document> */
+    private function needsAttentionDocuments(User $user): array
+    {
+        return Document::query()
+            ->where(function (Builder $q) use ($user) {
+                $q->where('author_id', $user->id)->orWhere('owner_id', $user->id);
+            })
+            ->where(function (Builder $q) {
+                $q->where('status', DocumentStatus::Rejected->value)
+                    ->orWhere(function (Builder $inner) {
+                        $inner->where('status', DocumentStatus::Draft->value)
+                            ->whereHas('validations', fn (Builder $v) => $v->where(
+                                'status',
+                                ValidationStatus::CorrectionRequested->value
+                            ));
+                    });
+            })
+            ->with(['folder:id,name'])
+            ->latest('updated_at')
+            ->limit(8)
+            ->get(['id', 'reference', 'title', 'status', 'folder_id', 'updated_at'])
+            ->all();
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function recentCommentsOnMyDocuments(User $user): array
+    {
+        return Comment::query()
+            ->whereHas('document', function (Builder $q) use ($user) {
+                $q->where('author_id', $user->id)->orWhere('owner_id', $user->id);
+            })
+            ->where('user_id', '!=', $user->id)
+            ->with(['document:id,reference,title', 'user:id,name'])
+            ->latest()
+            ->limit(8)
+            ->get(['id', 'document_id', 'user_id', 'content', 'created_at'])
+            ->map(fn (Comment $c) => [
+                'id' => $c->id,
+                'content' => $c->content,
+                'created_at' => $c->created_at,
+                'user' => $c->user ? ['id' => $c->user->id, 'name' => $c->user->name] : null,
+                'document' => $c->document ? [
+                    'id' => $c->document->id,
+                    'reference' => $c->document->reference,
+                    'title' => $c->document->title,
+                ] : null,
+            ])
+            ->all();
+    }
+
+    /** @param  \Illuminate\Support\Collection<int, Validation>  $validations */
+    private function serializeValidations($validations): array
+    {
+        return $validations->map(fn (Validation $v) => [
+            'id' => $v->id,
+            'status' => $v->status?->value ?? $v->status,
+            'created_at' => $v->created_at,
+            'document' => $v->document ? [
+                'id' => $v->document->id,
+                'reference' => $v->document->reference,
+                'title' => $v->document->title,
+                'status' => $v->document->status?->value ?? $v->document->status,
+            ] : null,
+            'workflow_step' => $v->workflowStep ? [
+                'id' => $v->workflowStep->id,
+                'name' => $v->workflowStep->name,
+                'step_order' => $v->workflowStep->step_order,
+            ] : null,
+            'due_at' => $v->due_at,
+            'sla_hours' => $v->sla_hours,
+            'is_overdue' => $v->due_at !== null && $v->due_at->isPast(),
+        ])->values()->all();
     }
 
     private function scopedDocuments(ReportingScope $scope, bool $withTrashed = false): Builder
@@ -200,7 +370,6 @@ class DashboardService
             return $query->count();
         }
 
-        // chef de projet : membres des projets managés
         $projectIds = $scope->projectIds();
         if ($projectIds === []) {
             return 0;

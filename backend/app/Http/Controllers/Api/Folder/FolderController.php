@@ -65,8 +65,11 @@ class FolderController extends Controller
     {
         $this->authorize('view', $folder);
 
-        $folder->load(['creator', 'project', 'department', 'children'])
-            ->loadCount(['children', 'documents']);
+        $folder->load(['creator', 'project', 'department', 'children', 'tags'])
+            ->loadCount(['children', 'documents'])
+            ->loadExists([
+                'favorites as is_favorited' => fn ($q) => $q->where('user_id', request()->user()->id),
+            ]);
 
         return response()->json([
             'folder' => new FolderResource($folder),

@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Support\DocumentWorkflow;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -17,7 +18,13 @@ class DocumentResource extends JsonResource
             'title' => $this->title,
             'description' => $this->description,
             'summary' => $this->summary,
+            'ai_analysis' => $this->ai_analysis,
+            'ai_processed_at' => $this->ai_processed_at,
             'status' => $this->status?->value ?? $this->status,
+            'is_personal' => DocumentWorkflow::isPersonal($this->resource),
+            'subject_to_workflow' => DocumentWorkflow::subjectToWorkflow($this->resource),
+            'recommends_workflow' => DocumentWorkflow::recommendsWorkflow($this->resource),
+            'can_propose' => DocumentWorkflow::canPropose($this->resource),
             'confidentiality' => $this->confidentiality?->value ?? $this->confidentiality,
             'is_editable' => $this->is_editable,
             'language' => $this->language,
@@ -61,6 +68,7 @@ class DocumentResource extends JsonResource
                 'slug' => $tag->slug,
             ])),
             'archived_at' => $this->archived_at,
+            'is_favorited' => (bool) ($this->is_favorited ?? false),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'deleted_at' => $this->deleted_at,

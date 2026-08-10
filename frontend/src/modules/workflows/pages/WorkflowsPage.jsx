@@ -1,35 +1,39 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { GitBranch, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import RequirePermission from '@/components/RequirePermission'
 import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
-import Card from '@/components/ui/Card'
-import EmptyState from '@/components/ui/EmptyState'
+import DataTable from '@/components/ui/DataTable'
 import Input from '@/components/ui/Input'
 import Label from '@/components/ui/Label'
-import LoadingScreen from '@/components/ui/LoadingScreen'
+import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
-import { unwrapPaginated } from '@/lib/apiHelpers'
+import { unwrapPaginated, PAGE_SIZE } from '@/lib/apiHelpers'
 import { getErrorMessage } from '@/lib/api'
 import { queryKeys } from '@/lib/queryClient'
 import { workflowsApi } from '@/modules/workflows/api'
 
+const emptyForm = {
+  name: '',
+  code: '',
+  description: '',
+  stepName: 'Validation',
+}
+
 export default function WorkflowsPage() {
   const queryClient = useQueryClient()
+  const [page, setPage] = useState(1)
   const [showForm, setShowForm] = useState(false)
-  const [form, setForm] = useState({
-    name: '',
-    code: '',
-    description: '',
-    stepName: 'Validation',
-  })
+  const [form, setForm] = useState(emptyForm)
+
+  const listParams = { per_page: PAGE_SIZE, page }
 
   const workflowsQuery = useQuery({
-    queryKey: queryKeys.workflows({ per_page: 50 }),
-    queryFn: () => workflowsApi.list({ per_page: 50 }),
+    queryKey: queryKeys.workflows(listParams),
+    queryFn: () => workflowsApi.list(listParams),
   })
 
   const createWorkflow = useMutation({
@@ -44,7 +48,7 @@ export default function WorkflowsPage() {
     onSuccess: (data) => {
       toast.success(data.message)
       setShowForm(false)
-      setForm({ name: '', code: '', description: '', stepName: 'Validation' })
+      setForm(emptyForm)
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
     onError: (e) => toast.error(getErrorMessage(e)),
@@ -52,106 +56,138 @@ export default function WorkflowsPage() {
 
   const { data: workflows, meta } = unwrapPaginated(workflowsQuery.data)
 
+  const columns = [
+    {
+      key: 'name',
+      header: 'Workflow',
+      cell: (wf) => (
+        <div>
+          <Link to={`/workflows/${wf.id}`} className="font-medium hover:text-primary">
+            {wf.name}
+          </Link>
+          {wf.description ? (
+            <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">{wf.description}</p>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'code',
+      header: 'Code',
+      cell: (wf) => <span className="text-muted-foreground">{wf.code || '—'}</span>,
+    },
+    {
+      key: 'status',
+      header: 'Statut',
+      cell: (wf) => (
+        <Badge tone={wf.is_active ? 'success' : 'neutral'}>
+          {wf.is_active ? 'Actif' : 'Inactif'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'steps',
+      header: 'Étapes',
+      cell: (wf) => wf.steps_count ?? 0,
+    },
+    {
+      key: 'docs',
+      header: 'Documents',
+      cell: (wf) => wf.documents_count ?? 0,
+    },
+  ]
+
   return (
     <RequirePermission permission="workflows.manage">
       <PageHeader
         title="Workflows"
-        description="Circuits de validation (API /workflows)."
+        description="Circuits de validation documentaire."
         actions={
-          <Button size="sm" onClick={() => setShowForm((v) => !v)}>
+          <Button size="sm" onClick={() => setShowForm(true)}>
             <Plus className="h-4 w-4" />
             Nouveau workflow
           </Button>
         }
       />
 
-      {showForm ? (
-        <Card className="mb-6">
-          <form
-            className="grid gap-4 sm:grid-cols-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              createWorkflow.mutate()
-            }}
-          >
-            <div>
-              <Label htmlFor="w-name">Nom</Label>
-              <Input
-                id="w-name"
-                required
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="w-code">Code (optionnel)</Label>
-              <Input
-                id="w-code"
-                value={form.code}
-                onChange={(e) => setForm({ ...form, code: e.target.value })}
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <Label htmlFor="w-desc">Description</Label>
-              <Input
-                id="w-desc"
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="w-step">Première étape</Label>
-              <Input
-                id="w-step"
-                required
-                value={form.stepName}
-                onChange={(e) => setForm({ ...form, stepName: e.target.value })}
-              />
-            </div>
-            <div className="flex items-end gap-2">
-              <Button type="submit" disabled={createWorkflow.isPending}>
-                Créer
-              </Button>
-              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
-                Annuler
-              </Button>
-            </div>
-          </form>
-        </Card>
-      ) : null}
+      <DataTable
+        columns={columns}
+        rows={workflows}
+        loading={workflowsQuery.isLoading}
+        emptyTitle="Aucun workflow"
+        meta={meta}
+        onPageChange={setPage}
+      />
 
-      {workflowsQuery.isLoading ? (
-        <LoadingScreen />
-      ) : workflows.length === 0 ? (
-        <EmptyState title="Aucun workflow" />
-      ) : (
-        <div className="grid gap-3">
-          {workflows.map((wf) => (
-            <Card key={wf.id} className="flex items-start justify-between gap-4">
-              <div>
-                <div className="flex items-center gap-2">
-                  <GitBranch className="h-4 w-4 text-primary" />
-                  <Link to={`/workflows/${wf.id}`} className="font-medium hover:text-primary">
-                    {wf.name}
-                  </Link>
-                  <Badge tone={wf.is_active ? 'success' : 'neutral'}>
-                    {wf.is_active ? 'Actif' : 'Inactif'}
-                  </Badge>
-                </div>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {wf.code} · {wf.steps_count ?? 0} étape(s) · {wf.documents_count ?? 0} document(s)
-                </p>
-                {wf.description ? (
-                  <p className="mt-2 text-sm text-muted-foreground">{wf.description}</p>
-                ) : null}
-              </div>
-            </Card>
-          ))}
-          {meta ? (
-            <p className="text-xs text-muted-foreground">{meta.total} workflow(s)</p>
-          ) : null}
-        </div>
-      )}
+      <Modal
+        open={showForm}
+        onClose={() => {
+          setShowForm(false)
+          setForm(emptyForm)
+        }}
+        title="Nouveau workflow"
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setShowForm(false)
+                setForm(emptyForm)
+              }}
+            >
+              Annuler
+            </Button>
+            <Button type="submit" form="wf-form" disabled={createWorkflow.isPending}>
+              Créer
+            </Button>
+          </>
+        }
+      >
+        <form
+          id="wf-form"
+          className="grid gap-4 sm:grid-cols-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            createWorkflow.mutate()
+          }}
+        >
+          <div>
+            <Label htmlFor="w-name">Nom</Label>
+            <Input
+              id="w-name"
+              required
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </div>
+          <div>
+            <Label htmlFor="w-code">Code (optionnel)</Label>
+            <Input
+              id="w-code"
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="w-desc">Description</Label>
+            <Input
+              id="w-desc"
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </div>
+          <div className="sm:col-span-2">
+            <Label htmlFor="w-step">Première étape</Label>
+            <Input
+              id="w-step"
+              required
+              value={form.stepName}
+              onChange={(e) => setForm({ ...form, stepName: e.target.value })}
+            />
+          </div>
+        </form>
+      </Modal>
     </RequirePermission>
   )
 }

@@ -1,5 +1,7 @@
 import BrandMark from '@/components/BrandMark'
 import LoginForm from '@/modules/auth/components/LoginForm'
+import logo from '../../../assets/images/LogoEBA.png'
+
 
 export default function LoginPage() {
   return (
@@ -7,11 +9,7 @@ export default function LoginPage() {
       <div className="flex flex-col px-6 py-10 md:px-12">
         <div className="flex justify-center lg:justify-start">
           <div className="flex items-center gap-3">
-            <BrandMark size="lg" />
-            <div>
-              <p className="text-lg font-semibold tracking-tight">fileBox</p>
-              <p className="text-xs text-muted-foreground">E-business Afrique</p>
-            </div>
+            <img src={logo} alt="Logo e-BA" className="w-40 h-40" />
           </div>
         </div>
 
@@ -39,7 +37,8 @@ export default function LoginPage() {
             Documents, versions, droits et validations — au même endroit.
           </h2>
           <p className="mt-4 max-w-md text-sm text-white/70">
-            OCR et assistants IA arriveront dans une phase suivante, sans changer cette base.
+            Contrôle d&apos;accès par rôle, workflows de validation et traçabilité des actions —
+            pour une GED conforme aux exigences métier.
           </p>
         </div>
       </div>

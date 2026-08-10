@@ -2,18 +2,21 @@
 
 namespace App\Services\Folder;
 
+use App\Enums\DocumentStatus;
+use App\Events\Document\DocumentDeleted;
+use App\Events\Folder\FolderCreated;
+use App\Events\Folder\FolderDeleted;
 use App\Models\Folder;
 use App\Models\User;
 use App\Services\Access\AccessService;
-use App\Services\ActivityLog\ActivityLogService;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class FolderService
 {
     public function __construct(
         private readonly AccessService $accessService,
-        private readonly ActivityLogService $activityLog,
     ) {}
 
     /**
@@ -24,7 +27,7 @@ class FolderService
         $scoped = ! $actor->hasPermission('folders.view');
 
         $query = Folder::query()
-            ->with(['creator', 'project', 'department'])
+            ->with(['creator', 'project', 'department', 'tags'])
             ->withCount(['children', 'documents'])
             ->orderBy('name');
 
@@ -35,7 +38,8 @@ class FolderService
         if (array_key_exists('parent_id', $filters)) {
             $query->where('parent_id', $filters['parent_id']);
         } elseif (empty($filters['trashed']) && ! $scoped) {
-            $query->whereNull('parent_id');
+            $query->whereNull('parent_id')
+                ->where('is_project_root', false);
         }
 
         if (! empty($filters['project_id'])) {
@@ -51,7 +55,11 @@ class FolderService
             $query->whereIn('id', $ids ?: [0]);
         }
 
-        return $query->get();
+        return $query
+            ->withExists([
+                'favorites as is_favorited' => fn ($q) => $q->where('user_id', $actor->id),
+            ])
+            ->get();
     }
 
     public function tree(User $actor, ?int $projectId = null, ?int $departmentId = null): Collection
@@ -65,9 +73,16 @@ class FolderService
         }
 
         $query = Folder::query()
-            ->with(['children' => fn ($q) => $q->orderBy('name')])
+            ->with([
+                'children' => fn ($q) => $q->orderBy('name')->with([
+                    'children' => fn ($q2) => $q2->orderBy('name')->with([
+                        'children' => fn ($q3) => $q3->orderBy('name'),
+                    ]),
+                ]),
+            ])
             ->withCount(['children', 'documents'])
             ->whereNull('parent_id')
+            ->where('is_project_root', false)
             ->orderBy('name');
 
         if ($projectId) {
@@ -82,7 +97,7 @@ class FolderService
     }
 
     /**
-     * @param  array{name: string, parent_id?: int|null, project_id?: int|null, department_id?: int|null}  $data
+     * @param  array{name: string, parent_id?: int|null, project_id?: int|null, department_id?: int|null, tag_ids?: array<int>}  $data
      */
     public function create(User $actor, array $data): Folder
     {
@@ -98,20 +113,21 @@ class FolderService
             'project_id' => $data['project_id'] ?? null,
             'department_id' => $data['department_id'] ?? null,
             'created_by' => $actor->id,
-        ])->load(['creator', 'project', 'department'])->loadCount(['children', 'documents']);
+        ]);
 
-        $this->activityLog->log(
-            action: 'folder.created',
-            user: $actor,
-            subject: $folder,
-            description: "Dossier créé : {$folder->name}",
-        );
+        if (! empty($data['tag_ids'])) {
+            $folder->tags()->sync($data['tag_ids']);
+        }
+
+        $folder->load(['creator', 'project', 'department', 'tags'])->loadCount(['children', 'documents']);
+
+        event(new FolderCreated($folder, $actor));
 
         return $folder;
     }
 
     /**
-     * @param  array{name?: string, parent_id?: int|null, project_id?: int|null, department_id?: int|null}  $data
+     * @param  array{name?: string, parent_id?: int|null, project_id?: int|null, department_id?: int|null, tag_ids?: array<int>}  $data
      */
     public function update(Folder $folder, array $data): Folder
     {
@@ -127,7 +143,11 @@ class FolderService
         ])->all());
         $folder->save();
 
-        return $folder->load(['creator', 'project', 'department'])->loadCount(['children', 'documents']);
+        if (array_key_exists('tag_ids', $data)) {
+            $folder->tags()->sync($data['tag_ids'] ?? []);
+        }
+
+        return $folder->load(['creator', 'project', 'department', 'tags'])->loadCount(['children', 'documents']);
     }
 
     public function move(Folder $folder, ?int $parentId): Folder
@@ -142,26 +162,35 @@ class FolderService
 
     public function delete(Folder $folder): void
     {
-        if ($folder->children()->exists()) {
-            throw ValidationException::withMessages([
-                'folder' => ['Impossible de supprimer un dossier contenant des sous-dossiers.'],
-            ]);
-        }
-
-        if ($folder->documents()->exists()) {
-            throw ValidationException::withMessages([
-                'folder' => ['Impossible de supprimer un dossier contenant des documents.'],
-            ]);
-        }
-
         $name = $folder->name;
-        $folder->delete();
 
-        $this->activityLog->log(
-            action: 'folder.deleted',
-            subject: $folder,
-            description: "Dossier supprimé : {$name}",
-        );
+        DB::transaction(function () use ($folder) {
+            $this->deleteRecursive($folder);
+        });
+
+        event(new FolderDeleted($folder, $name));
+    }
+
+    /** Soft-delete le dossier, ses sous-dossiers et documents (corbeille). */
+    private function deleteRecursive(Folder $folder): void
+    {
+        $children = $folder->children()->get();
+        foreach ($children as $child) {
+            $this->deleteRecursive($child);
+        }
+
+        $documents = $folder->documents()->get();
+        foreach ($documents as $document) {
+            $reference = $document->reference;
+            $document->status = DocumentStatus::Deleted;
+            $document->save();
+            $document->delete();
+            event(new DocumentDeleted($document, $reference));
+        }
+
+        if (! $folder->trashed()) {
+            $folder->delete();
+        }
     }
 
     public function restore(Folder $folder): Folder

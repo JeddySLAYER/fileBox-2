@@ -2,21 +2,15 @@
 
 namespace App\Services\Comment;
 
+use App\Events\Comment\CommentPosted;
 use App\Models\Comment;
 use App\Models\Document;
 use App\Models\User;
-use App\Notifications\CommentPostedNotification;
-use App\Services\ActivityLog\ActivityLogService;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Support\Facades\Notification;
 use Illuminate\Validation\ValidationException;
 
 class CommentService
 {
-    public function __construct(
-        private readonly ActivityLogService $activityLog,
-    ) {}
-
     public function listForDocument(Document $document): Collection
     {
         return Comment::query()
@@ -48,25 +42,7 @@ class CommentService
             'content' => $data['content'],
         ])->load(['user', 'replies.user']);
 
-        $recipients = collect([$document->author_id, $document->owner_id])
-            ->filter()
-            ->unique()
-            ->reject(fn ($id) => $id === $actor->id);
-
-        if ($recipients->isNotEmpty()) {
-            Notification::send(
-                User::query()->whereIn('id', $recipients)->get(),
-                new CommentPostedNotification($comment, $document)
-            );
-        }
-
-        $this->activityLog->log(
-            action: 'comment.created',
-            user: $actor,
-            subject: $document,
-            description: "Commentaire sur {$document->reference}",
-            properties: ['comment_id' => $comment->id],
-        );
+        event(new CommentPosted($comment, $document, $actor));
 
         return $comment;
     }

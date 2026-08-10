@@ -9,12 +9,14 @@ class DepartmentPolicy
 {
     public function viewAny(User $actor): bool
     {
-        return $actor->hasPermission('departments.manage');
+        return $actor->hasPermission('departments.manage')
+            || $actor->hasPermission('projects.manage');
     }
 
     public function view(User $actor, Department $department): bool
     {
-        return $actor->hasPermission('departments.manage');
+        return $actor->hasPermission('departments.manage')
+            || $actor->hasPermission('projects.manage');
     }
 
     public function create(User $actor): bool

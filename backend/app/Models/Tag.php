@@ -13,4 +13,9 @@ class Tag extends Model
     {
         return $this->belongsToMany(Document::class)->withTimestamps();
     }
+
+    public function folders(): BelongsToMany
+    {
+        return $this->belongsToMany(Folder::class)->withTimestamps();
+    }
 }

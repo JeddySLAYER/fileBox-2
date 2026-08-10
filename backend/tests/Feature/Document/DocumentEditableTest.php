@@ -20,40 +20,44 @@ function editableDocFolder(): Folder
     ]);
 }
 
-test('un document is_editable peut être modifié en ligne', function () {
+test('un fichier texte devient éditable en ligne automatiquement', function () {
     Sanctum::actingAs(adminUser());
     $folder = editableDocFolder();
 
-    $id = $this->post('/api/documents', [
+    $created = $this->post('/api/documents', [
         'title' => 'Note éditable',
         'folder_id' => $folder->id,
-        'is_editable' => true,
+        'is_editable' => false, // ignoré — dérivé de l'extension
         'file' => UploadedFile::fake()->createWithContent('note.txt', 'contenu initial'),
-    ], ['Accept' => 'application/json'])->json('document.id');
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document');
 
-    $this->getJson("/api/documents/{$id}/content")
+    expect($created['is_editable'])->toBeTrue();
+
+    $this->getJson("/api/documents/{$created['id']}/content")
         ->assertOk()
         ->assertJsonPath('content', 'contenu initial');
 
-    $this->putJson("/api/documents/{$id}/content", [
+    $this->putJson("/api/documents/{$created['id']}/content", [
         'content' => 'contenu modifié depuis le site',
         'change_summary' => 'édition web',
     ])->assertOk()
         ->assertJsonPath('document.current_version.version_number', 2);
 
-    expect(Document::query()->find($id)->versions()->count())->toBe(2);
+    expect(Document::query()->find($created['id'])->versions()->count())->toBe(2);
 });
 
-test('un document non éditable refuse l édition en ligne et exige un upload', function () {
+test('un pdf ou office n est pas éditable en ligne', function () {
     Sanctum::actingAs(adminUser());
     $folder = editableDocFolder();
 
     $id = $this->post('/api/documents', [
         'title' => 'PDF scan',
         'folder_id' => $folder->id,
-        'is_editable' => false,
+        'is_editable' => true, // ignoré
         'file' => UploadedFile::fake()->create('scan.pdf', 20, 'application/pdf'),
-    ], ['Accept' => 'application/json'])->json('document.id');
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    expect(Document::query()->find($id)->is_editable)->toBeFalse();
 
     $this->getJson("/api/documents/{$id}/content")->assertUnprocessable();
 
@@ -67,5 +71,25 @@ test('un document non éditable refuse l édition en ligne et exige un upload', 
         'change_summary' => 'réupload obligatoire',
     ], ['Accept' => 'application/json'])
         ->assertCreated()
-        ->assertJsonPath('document.current_version.version_number', 2);
+        ->assertJsonPath('document.current_version.version_number', 2)
+        ->assertJsonPath('document.is_editable', false);
+});
+
+test('un réupload texte rend le document éditable', function () {
+    Sanctum::actingAs(adminUser());
+    $folder = editableDocFolder();
+
+    $id = $this->post('/api/documents', [
+        'title' => 'Contrat',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('contrat.docx', 30, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    expect(Document::query()->find($id)->is_editable)->toBeFalse();
+
+    $this->post("/api/documents/{$id}/versions", [
+        'file' => UploadedFile::fake()->createWithContent('contrat.txt', 'version texte'),
+    ], ['Accept' => 'application/json'])
+        ->assertCreated()
+        ->assertJsonPath('document.is_editable', true);
 });

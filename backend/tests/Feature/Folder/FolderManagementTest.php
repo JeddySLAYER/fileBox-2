@@ -56,18 +56,21 @@ test('un dossier ne peut pas être déplacé sous lui-même ou un descendant', f
     ])->assertUnprocessable();
 });
 
-test('un dossier non vide ne peut pas être supprimé', function () {
+test('un dossier non vide peut être soft-supprimé avec son contenu', function () {
     Sanctum::actingAs(adminUser());
     $actorId = adminUser()->id;
 
     $parent = Folder::query()->create(['name' => 'Parent', 'created_by' => $actorId]);
-    Folder::query()->create([
+    $child = Folder::query()->create([
         'name' => 'Child',
         'parent_id' => $parent->id,
         'created_by' => $actorId,
     ]);
 
-    $this->deleteJson("/api/folders/{$parent->id}")->assertUnprocessable();
+    $this->deleteJson("/api/folders/{$parent->id}")->assertOk();
+
+    expect($parent->fresh()->trashed())->toBeTrue()
+        ->and($child->fresh()->trashed())->toBeTrue();
 });
 
 test('un dossier vide peut être soft-supprimé puis restauré', function () {

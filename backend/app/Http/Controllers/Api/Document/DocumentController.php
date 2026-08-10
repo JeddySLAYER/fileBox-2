@@ -69,6 +69,9 @@ class DocumentController extends Controller
             'versions.creator',
             'documentType',
             'tags',
+            'workflow',
+        ])->loadExists([
+            'favorites as is_favorited' => fn ($q) => $q->where('user_id', request()->user()->id),
         ]);
 
         return response()->json([
@@ -149,6 +152,30 @@ class DocumentController extends Controller
         ]);
     }
 
+    public function publish(Document $document): JsonResponse
+    {
+        $this->authorize('archive', $document);
+
+        $document = $this->documentService->publish($document, request()->user());
+
+        return response()->json([
+            'message' => 'Document publié.',
+            'document' => new DocumentResource($document),
+        ]);
+    }
+
+    public function propose(Document $document): JsonResponse
+    {
+        $this->authorize('propose', $document);
+
+        $document = $this->documentService->propose($document, request()->user());
+
+        return response()->json([
+            'message' => 'Document proposé à validation.',
+            'document' => new DocumentResource($document),
+        ]);
+    }
+
     public function storeVersion(StoreDocumentVersionRequest $request, Document $document): JsonResponse
     {
         $this->authorize('version', $document);
@@ -211,6 +238,29 @@ class DocumentController extends Controller
         $versions = $document->versions()->with('creator')->orderByDesc('version_number')->get();
 
         return VersionResource::collection($versions);
+    }
+
+    public function compareVersions(Request $request, Document $document): JsonResponse
+    {
+        $this->authorize('view', $document);
+
+        $data = $request->validate([
+            'left_version_id' => ['required', 'integer', 'exists:versions,id'],
+            'right_version_id' => ['required', 'integer', 'exists:versions,id', 'different:left_version_id'],
+        ]);
+
+        $left = Version::query()->findOrFail($data['left_version_id']);
+        $right = Version::query()->findOrFail($data['right_version_id']);
+        $comparison = $this->documentService->compareVersions($document, $left, $right);
+
+        return response()->json([
+            'left' => new VersionResource($comparison['left']),
+            'right' => new VersionResource($comparison['right']),
+            'metadata_diff' => $comparison['metadata_diff'],
+            'content_comparable' => $comparison['content_comparable'],
+            'content_identical' => $comparison['content_identical'],
+            'content_diff' => $comparison['content_diff'],
+        ]);
     }
 
     public function download(Document $document): BinaryFileResponse

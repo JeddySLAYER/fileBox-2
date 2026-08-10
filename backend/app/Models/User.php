@@ -20,6 +20,7 @@ use Laravel\Sanctum\HasApiTokens;
     'password',
     'department_id',
     'must_change_password',
+    'temporary_password_expires_at',
     'is_active',
 ])]
 #[Hidden(['password', 'remember_token'])]
@@ -34,6 +35,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'must_change_password' => 'boolean',
+            'temporary_password_expires_at' => 'datetime',
             'is_active' => 'boolean',
         ];
     }
@@ -78,6 +80,11 @@ class User extends Authenticatable
         return $this->hasMany(Access::class);
     }
 
+    public function favorites(): HasMany
+    {
+        return $this->hasMany(Favorite::class);
+    }
+
     public function comments(): HasMany
     {
         return $this->hasMany(Comment::class);
@@ -93,5 +100,21 @@ class User extends Authenticatable
         return $this->roles()
             ->whereHas('permissions', fn ($query) => $query->where('slug', $slug))
             ->exists();
+    }
+
+    /** Admin / direction / chef de projet : choix libre des départements. */
+    public function canManageProjectsGlobally(): bool
+    {
+        return $this->hasRole('administrateur')
+            || $this->hasRole('direction')
+            || $this->hasRole('chef_projet');
+    }
+
+    /** Responsable limité à son département pour la gestion de projets. */
+    public function isDepartmentScopedProjectManager(): bool
+    {
+        return $this->hasPermission('projects.manage')
+            && $this->hasRole('responsable_departement')
+            && ! $this->canManageProjectsGlobally();
     }
 }

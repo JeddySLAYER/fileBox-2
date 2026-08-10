@@ -33,6 +33,7 @@ class UpdateUserRequest extends FormRequest
             'role_ids' => ['sometimes', 'array'],
             'role_ids.*' => ['integer', 'exists:roles,id'],
             'is_active' => ['sometimes', 'boolean'],
+            'replace_department_manager' => ['sometimes', 'boolean'],
         ];
     }
 }

@@ -22,6 +22,7 @@ class UpdateDocumentTypeRequest extends FormRequest
             'slug' => ['sometimes', 'string', 'max:255', Rule::unique('document_types', 'slug')->ignore($id)],
             'description' => ['nullable', 'string'],
             'default_workflow_id' => ['nullable', 'integer', 'exists:workflows,id'],
+            'requires_workflow' => ['sometimes', 'boolean'],
         ];
     }
 }

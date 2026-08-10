@@ -3,8 +3,13 @@ import api from '@/lib/api'
 export const validationsApi = {
   listForDocument: (documentId) =>
     api.get(`/documents/${documentId}/validations`).then((r) => r.data),
-  start: (documentId, workflowId) =>
-    api.post(`/documents/${documentId}/workflow/start`, { workflow_id: workflowId }).then((r) => r.data),
+  start: (documentId, workflowId, deadlines = []) =>
+    api
+      .post(`/documents/${documentId}/workflow/start`, {
+        ...(workflowId ? { workflow_id: workflowId } : {}),
+        ...(deadlines.length ? { deadlines } : {}),
+      })
+      .then((r) => r.data),
   restart: (documentId) =>
     api.post(`/documents/${documentId}/workflow/restart`).then((r) => r.data),
   approve: (validationId, comment) =>

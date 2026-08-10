@@ -3,11 +3,12 @@
   Gestion Électronique de Documents (GED)
 ================================================================================
 
-Dernière mise à jour : 24 juillet 2026
+Dernière mise à jour : 27 juillet 2026
 Stack : React 19 (frontend) + Laravel 13 / PHP 8.4 (backend) + PostgreSQL
 Auth API : Laravel Sanctum (Bearer tokens)
-État : backend API complet + frontend branché sur les APIs
-       (OCR / IA volontairement reportés)
+IA : Google Gemini (GEMINI_API_KEY) — résumé / analyse / OCR
+État : produit opérationnel (API + SPA) — OCR/IA branchés, workflows SLA,
+       favoris, notifications ciblées, dashboard collaborateur + pilotage
 
 
 ================================================================================
@@ -15,19 +16,21 @@ Auth API : Laravel Sanctum (Bearer tokens)
 ================================================================================
 
 FileBox est une GED d’entreprise. Le document est l’objet métier central
-(pas un simple fichier) : versions, droits, workflows, commentaires, tags, etc.
+(pas un simple fichier) : versions, droits, workflows, commentaires, tags,
+partages, IA, favoris, journal d’activité.
 
 Ce dépôt contient :
-  - backend/   → API REST Laravel (modules métier + tests Pest)
-  - frontend/  → SPA React branchée module par module sur l’API
-  - o.txt      → CE guide (à tenir à jour à chaque sprint)
+  - backend/            → API REST Laravel (modules métier + tests Pest)
+  - frontend/           → SPA React branchée module par module sur l’API
+  - o.txt               → CE guide (à tenir à jour)
+  - SCENARIOS-TESTS.md  → cahier de scénarios de recette (nominal + erreurs)
 
 Principe de lecture
   1. Démarrage rapide (§2)
   2. Architecture (§3)
   3. Modules faits (§4 backend, §5 frontend)
   4. Sécurité / seed / conventions (§6–9)
-  5. Ce qui reste (§10)
+  5. Hors scope / commandes / carte (§10–13)
 
 
 ================================================================================
@@ -38,16 +41,22 @@ Prérequis
   - PHP 8.3+ (projet sur 8.4), Composer, PostgreSQL
   - Extension PHP zip (sauvegardes), pdo_pgsql
   - Node.js 20+ (frontend)
+  - (optionnel) clé Gemini pour l’assistant IA
+  - (optionnel) SMTP pour l’envoi des MDP temporaires
 
 Backend
   cd backend
   cp .env.example .env          # si besoin
   # Configurer DB_* (pgsql) dans .env
+  # Optionnel : GEMINI_API_KEY, MAIL_*
   composer install
   php artisan key:generate
   php artisan migrate
   php artisan db:seed
   php artisan serve             # http://127.0.0.1:8000
+
+  # Scheduler (accès expirés + rappels deadline)
+  php artisan schedule:work     # ou cron : * * * * * php artisan schedule:run
 
 Frontend
   cd frontend
@@ -59,6 +68,13 @@ Frontend
 Compte admin seedé
   email    : admin@filebox.local
   password : password
+
+Variables .env importantes (backend)
+  DB_*                 PostgreSQL
+  MAIL_*               SMTP (mdp temporaire — jamais renvoyé en JSON)
+  GEMINI_API_KEY=      Clé Google AI Studio
+  GEMINI_MODEL=gemini-2.0-flash
+  # GEMINI_MAX_BYTES=12000000
 
 Login API (Postman / curl)
   POST http://127.0.0.1:8000/api/auth/login
@@ -73,10 +89,10 @@ Login API (Postman / curl)
 
 Login UI
   Ouvrir http://127.0.0.1:5173/login
-  Même compte admin
 
-Tests backend
+Tests / qualité
   cd backend && php artisan test
+  cd frontend && npm run lint && npm run build
 
 
 ================================================================================
@@ -92,27 +108,40 @@ Principes (specs GED + clean code / SOLID, sans sur-ingénierie) :
   FormRequest → validation des entrées
   Resource    → format de sortie JSON
   Enum        → DocumentStatus, ValidationStatus, AccessAbility, …
+  Support/    → helpers purs (DocumentEditability, DocumentWorkflow,
+                ReportingScope, SoftDeleteArchive)
+  Events/Listeners → journal + notifications (pas d’appels directs
+                     ActivityLog depuis les services métier)
 
 Pourquoi pas de repositories ?
   YAGNI : Eloquent + Services suffisent.
 
 Couches
   Frontend React  →  API Laravel (/api)  →  Services  →  Models / Storage
+  Effets de bord  →  Events / Listeners (activity + notifs)
+  IA              →  GeminiClient (HTTP sync) via DocumentAiService
 
 Organisation backend
   app/
+    Contracts/                   LogsActivity
+    Events/{Domaine}/            DomainActivityEvent + événements métier
+    Listeners/                   RecordActivityLog, Notify*, PrepareDocument…
+    Providers/EventServiceProvider.php
+    Support/                     DocumentEditability, DocumentWorkflow, …
     Enums/
     Models/
-    Services/{Domaine}/          Auth, User, Role, Document, Folder, …
+    Services/{Domaine}/          Auth, User, Document, Ai, Favorite, …
     Http/
       Controllers/Api/{Domaine}/
       Requests/{Domaine}/
       Resources/
       Middleware/                EnsurePasswordIsChanged (password.changed)
     Policies/
-    Notifications/               DB (+ mail mdp temporaire)
+    Notifications/               DB (+ mail TemporaryPassword)
   database/migrations|seeders/
   routes/api.php                 TOUTES les routes FileBox
+  routes/console.php             accesses:revoke-expired,
+                                 notifications:access-deadlines + Schedule
   tests/Feature/{Module}/        Pest
 
 Organisation frontend
@@ -124,7 +153,7 @@ Organisation frontend
     modules/{domaine}/
       api.js      ← 1 fichier = 1 domaine API (miroir backend)
       pages/      écrans
-      components/ panneaux (commentaires, accès, validations…)
+      components/ panneaux (commentaires, accès, validations, IA…)
     routes/       RequireAuth / GuestOnly + routes protégées
   Design : palette EBA (#D73A31 primary), Tailwind 4, className
 
@@ -138,25 +167,37 @@ Organisation frontend
 Tables
   Organisation   departments, projects, project_user
   Sécurité       users (+ department_id, must_change_password, is_active,
-                 soft deletes), roles, permissions, pivots, accesses
-  Documentaire   folders, documents, versions, document_types,
-                 tags, document_tag, comments
+                 temporary_password_expires_at, soft deletes),
+                 roles, permissions, pivots, accesses (+ expiry_notified_at)
+  Documentaire   folders, documents (+ summary, ai_analysis, ai_processed_at),
+                 versions (+ ocr_text, is_locked), document_types
+                 (+ requires_workflow), tags, document_tag, comments,
+                 favorites (morph document|folder)
   Processus      workflows, workflow_steps, validations
+                 (+ sla_hours, due_at)
   Système        notifications, system_settings, activity_logs, backups
   Infra Laravel  cache, jobs, sessions, personal_access_tokens
 
 Décisions
   - PostgreSQL
   - Soft deletes : documents, dossiers, projets, workflows, types, users, comments
-  - documents.is_editable : édition en ligne vs réupload obligatoire
-  - Morph map : document / folder pour les accès
-  - Versions immuables (jamais d’écrasement de fichier)
+  - documents.is_editable : dérivé AUTOMATIQUEMENT de l’extension
+    (DocumentEditability) — jamais saisi manuellement
+  - Morph map : document / folder pour accès et favoris
+  - Versions immuables (jamais d’écrasement de fichier) ; anciennes verrouillées
   - Fichiers : storage/app/private/documents/{id}/v{n}/...
 
 Migrations clés
-  2026_07_23_100000 → 100014   schéma FileBox
+  2026_07_23_100000 → 100014   schéma FileBox initial
   2026_07_23_230000            rename editable → is_editable
   2026_07_23_233000            activity_logs + backups
+  2026_07_27_121100            temporary_password_expires_at
+  2026_07_27_123000            document_types.requires_workflow
+  2026_07_27_145700            versions.is_locked
+  2026_07_27_150500            accesses.expiry_notified_at
+  2026_07_27_160000            favorites
+  2026_07_27_161500            validations.sla_hours + due_at
+  2026_07_27_170000            documents summary / ai_analysis / ai_processed_at
 
 
 --- 4.2 Authentification -------------------------------------------------------
@@ -170,10 +211,13 @@ Endpoints
 Règles
   - Pas d’inscription publique (comptes créés par l’admin)
   - Compte inactif → refus
-  - Rate limit login
+  - Rate limit : 5 échecs → verrouillage 15 min (900 s)
   - must_change_password=true → seul me / password / logout
     (middleware password.changed sur le reste)
-  - Login / logout journalisés
+  - MDP temporaire expire après 24 h (temporary_password_expires_at)
+  - Login / logout / échecs journalisés (events)
+  - Le MDP temporaire n’est JAMAIS renvoyé dans les réponses API
+    (uniquement e-mail TemporaryPasswordNotification)
 
 
 --- 4.3 Utilisateurs -----------------------------------------------------------
@@ -182,7 +226,7 @@ Règles
   GET/PUT/DELETE     /api/users/{id}
   POST               /api/users/{id}/reset-password
 
-  Création → mdp temporaire + must_change_password + e-mail
+  Création → mdp temporaire + must_change_password + expires_at (+1 jour) + e-mail
   Suppression soft (deleted_at) mais définitive côté app : email libéré
   (réécrit deleted+{id}+…@deleted.local) ; is_active=false ; pas de restore
   Pas de self-delete ; reset révoque les tokens
@@ -219,8 +263,11 @@ Dossiers
 
 Documents
   CRUD + restore, move, archive/unarchive
+  POST   /api/documents/{id}/propose
+  POST   /api/documents/{id}/publish
   GET/PUT  /api/documents/{id}/content
   GET/POST /api/documents/{id}/versions
+  GET      /api/documents/{id}/versions/compare
   GET      /api/documents/{id}/download
   GET      /api/documents/{id}/versions/{v}/download
   GET      /api/documents/{id}/preview
@@ -228,42 +275,68 @@ Documents
   GET      /api/documents/{id}/preview-url          → URL signée
   GET      /api/signed/documents/{id}/preview       → sans Bearer (signed)
 
-is_editable
+Statuts DocumentStatus
+  brouillon → propose → en_validation → valide → publie
+  (+ rejete, archive, supprime)
+
+is_editable (DocumentEditability)
+  Extensions en ligne : txt, md, markdown, csv, tsv, json, xml,
+                        html, htm, css, js, log
   true  → GET/PUT content crée une nouvelle version
   false → content REFUSÉ (422) ; réupload POST .../versions obligatoire
+  Recalculé à chaque create / nouvelle version / save content
 
 Autres règles
   - Dossier obligatoire ; référence DOC-YYYY-xxxxxx
   - Version initiale à la création ; contenu jamais écrasé
-  - Archivé → non modifiable ; soft delete → corbeille
+  - Archivé / en_validation → non modifiable (selon règles policy/service)
+  - Soft delete → corbeille
   - Listes filtrées par accès si pas de permission globale view
+
+Propose / publish (DocumentWorkflow)
+  - Doc personnel (project_id null) : PAS de workflow
+  - Doc projet + confidentialité publique interne : éligible workflow
+  - requires_workflow sur le type = suggestion UI, PAS un blocage serveur
+  - propose : brouillon|rejeté → propose (+ notif managers)
+  - publish : depuis valide → publie (+ notifs auteur/owner + accès actifs)
 
 
 --- 4.7 Types, Tags, Commentaires ----------------------------------------------
 
-  /api/document-types  (delete soft + libère slug ; pas de restore)
+  /api/document-types  (delete soft + libère slug ; + requires_workflow)
   /api/tags
   PUT /api/documents/{id}/tags
   /api/documents/{id}/comments
   PUT/DELETE /api/comments/{id}
 
   Commentaires en fil (parent_id) ; liés au document (pas à une version)
+  Notifs commentaires ciblées : auteur/propriétaire du doc + parent si réponse
+  (pas de spam global)
 
 
 --- 4.8 Workflows & Validations ------------------------------------------------
 
   /api/workflows  (delete soft + libère code ; pas de restore)
   POST /api/documents/{id}/workflow/start|restart
+       body optionnel :
+         workflow_id
+         deadlines[] : { workflow_step_id, amount, unit: hours|days }
   GET  /api/documents/{id}/validations
   POST /api/validations/{id}/approve|reject|request-correction
 
 Cycle
   start → en_validation + 1 validation / étape
+  sla_hours stocké ; due_at posé sur la 1ʳᵉ étape, puis sur la suivante
+  après approve
   approve (ordre) → toutes obligatoires OK → valide
-  reject → rejeté
+  reject → rejeté (commentaire OBLIGATOIRE ≥ 3 caractères)
   request-correction → brouillon → restart
 
-Responsable étape : user, rôle, ou workflows.manage
+Qui peut agir
+  - Responsable nommé sur l’étape (user ou rôle)
+  - OU permission validations.act / workflows.manage
+
+Doc personnel → start workflow REFUSÉ (422)
 
 
 --- 4.9 Accès spécifiques (partage) --------------------------------------------
@@ -277,37 +350,76 @@ Héritage dossier → sous-dossiers + documents
 Policies : RBAC OU accès spécifique
 viewAny documents/folders : permission globale OU au moins un accès actif
 
+Scheduler
+  accesses:revoke-expired          everyMinute
+  notifications:access-deadlines   hourly (rappel J-1, une fois)
 
---- 4.10 Notifications ---------------------------------------------------------
+
+--- 4.10 Favoris ---------------------------------------------------------------
+
+  GET    /api/favorites
+  POST/DELETE /api/documents/{id}/favorite
+  POST/DELETE /api/folders/{id}/favorite
+
+  Morph document|folder ; exige un droit de vue
+  Affichés dashboard (home + overview) + ★ explorateur / fiche doc
+
+
+--- 4.11 Assistant IA (Gemini) -------------------------------------------------
+
+  POST /api/documents/{id}/ai/summarize   → documents.summary
+  POST /api/documents/{id}/ai/analyze     → documents.ai_analysis
+  POST /api/documents/{id}/ai/ocr         → versions.ocr_text (+ résumé éventuel)
+
+  Config : config/services.php → gemini.* (clé, modèle, max_bytes)
+  Client : App\Services\Ai\GeminiClient
+  Service : DocumentAiService
+  Sync HTTP (pas de queue obligatoire)
+  Multimodal : PDF / images ; texte pour extensions éditables
+  Office (docx…) : pas d’envoi direct → exporter PDF recommandé
+  Erreurs : clé absente, format non supporté, fichier trop gros → 422
+  Droit : view sur le document
+
+
+--- 4.12 Notifications ---------------------------------------------------------
 
   GET  /api/notifications (?unread=1)
   GET  /api/notifications/unread-count
   POST /api/notifications/{id}/read
   POST /api/notifications/read-all
 
-Déclenchées : partage, commentaire, validation
+Canal : database (sync) — important only
+Déclenchées
+  - Accès accordé / révoqué / bientôt expiré
+  - Document proposé / publié
+  - Action de validation (stakeholders)
+  - Commentaire (participants ciblés)
+  - MDP temporaire (mail)
 
 
---- 4.11 Paramètres, Recherche, Dashboard, Backup, Logs ------------------------
+--- 4.13 Paramètres, Recherche, Dashboard, Backup, Logs ------------------------
 
 Paramètres (settings.manage)
   GET/PUT /api/settings , PUT /api/settings/bulk , GET /api/settings/{key}
   Seeder : app.name, locale, max upload, session, backup.retention_days, …
 
 Recherche
-  GET /api/search?q=&status=&folder_id=&tag=&include_ocr=1&...
-  Titre, réf, description, tags, ocr_text ; filtré par accès si besoin
+  GET /api/search?q=&status=&folder_id=&project_id=&department_id=
+                   &document_type_id=&confidentiality=&tag=&include_ocr=
+  - Texte optionnel (≥2 car.) OU filtres seuls
+  - Titre, réf, description, tags ; ocr_text seulement si include_ocr=1
+  - Retourne aussi dossiers matchés
+  - Filtré par accès si besoin
 
-Dashboard (dashboard.view + ReportingScope)
-  GET /api/dashboard
-  Compteurs, docs par statut, validations pending, activité récente
-  Périmètre :
-    administrateur / direction → global
-    responsable_departement → départements managés (fallback department_id)
-    chef_projet → projets managés
-    collaborateur / invite → pas d'accès KPIs
+Dashboard (GET /api/dashboard)
+  - Collaborateur / invité → mode home (actionnable) :
+    validations à faire, docs à reprendre, partagés, commentaires,
+    favoris, récents — PAS de KPIs globaux
+  - Admin / Direction / Responsable / Chef projet → overview scopé
+    (ReportingScope) : compteurs, pending, bloqués/en retard (due_at,
+    fallback 7 j si pas de SLA), archivés, activité, favoris
 
-Sauvegardes (settings.manage) — COMPLET
+Sauvegardes (settings.manage)
   GET/POST /api/backups
   GET  /api/backups/{id}/download
   POST /api/backups/{id}/restore
@@ -315,10 +427,11 @@ Sauvegardes (settings.manage) — COMPLET
   ZIP = data.json (tables) + files/documents/** (binaires)
   Rétention auto via backup.retention_days après chaque création
 
-Journalisation (activity.view)
-  GET /api/activity-logs          (ReportingScope ; métier uniquement)
-  Événements métier : auth, documents, dossiers, accès, validations,
-  commentaires, backups, settings…
+Journalisation (activity.view / settings.manage)
+  GET /api/activity-logs          (ReportingScope ; métier)
+  Événements → Listeners → ActivityLogService
+  Domaines : auth, documents, dossiers, accès, validations, commentaires,
+  backups, settings, propose, publish…
 
 
 ================================================================================
@@ -341,34 +454,39 @@ Auth UI
   403 « mot de passe » → setMustChangePassword
 
 Écrans (tous branchés API)
-  /dashboard              stats
-  /explorer               dossiers + upload docs (+ lien corbeille)
-  /documents/:id          onglets : aperçu/édition, versions, contenu,
-                          commentaires, validations, partage
-  /search                 recherche (+ include_ocr prêt pour OCR)
-  /notifications          liste + badge header (poll 60s)
+  /dashboard              home collab OU KPIs pilotage selon rôle
+  /explorer               dossiers + upload + favoris ★ (+ lien corbeille)
+  /documents/:id          aperçu/édition, versions (compare), contenu,
+                          commentaires, validations (SLA), partage,
+                          Assistant IA (résumer / analyser / OCR)
+  /search                 texte + filtres (projet, département, statut,
+                          type, confidentialité) ; dossiers inclus
+  /notifications          liste + badge header (poll)
   /shared                 mes accès (GET /accesses/mine)
-  /trash                  corbeille docs + dossiers uniquement (trashed=1)
-  /users                  CRUD + reset password
+  /trash                  corbeille docs + dossiers (trashed=1)
+  /proposed               documents proposés (workflows.manage |
+                          projects.manage)
+  /users                  CRUD + reset password (sans afficher le MDP)
   /roles                  sync permissions
   /departments            CRUD
   /projects               liste + /projects/:id (membres)
-  /workflows              liste + /workflows/:id (étapes multi)
-  /document-types         CRUD
+  /workflows              liste + /workflows/:id (étapes)
+  /document-types         CRUD + requires_workflow
   /tags                   CRUD
   /settings               bulk update
   /backups                create / download / restore / delete
-  /activity               logs métier + logs techniques
+  /activity               logs métier
 
 Modules front (src/modules/)
-  auth, dashboard, documents, folders, search,
-  users, roles, departments, projects, workflows,
-  document-types, tags, comments, access, validations,
-  notifications, settings, backups, activity, trash
+  auth, dashboard, documents, folders, search, favorites,
+  users, roles, departments, projects, workflows, validations,
+  document-types, tags, comments, access, notifications,
+  settings, backups, activity, trash
 
 Permissions UI = slugs seedés (IMPORTANT)
   roles.manage · departments.manage · projects.manage · workflows.manage
-  document_types.manage · tags.manage · settings.manage · dashboard.view · activity.view
+  document_types.manage · tags.manage · settings.manage · dashboard.view
+  activity.view
   users.view|create|update|delete · folders.* · documents.* · …
   PAS de *.view fantômes pour roles/departments/projects/workflows
   Backups → settings.manage (comme le controller backend)
@@ -376,7 +494,7 @@ Permissions UI = slugs seedés (IMPORTANT)
 Design
   --color-primary #D73A31 (EBA)
   BrandMark « FB » temporaire (LogoEBA.png absent du dépôt)
-  Emplacements OCR/IA en dashed boxes sur dashboard / fiche doc / login
+  Plus de stubs OCR/IA en dashed boxes — Assistant IA réel sur la fiche
 
 
 ================================================================================
@@ -386,16 +504,20 @@ Design
 Besoin                              Emplacement
 ----------------------------------  --------------------------------------------
 Toutes les routes API               backend/routes/api.php
-Config app / DB / Sanctum           backend/.env , config/
+Scheduler / commandes métier        backend/routes/console.php
+Config app / DB / Sanctum / Gemini  backend/.env , config/services.php
 Schéma BDD                          backend/database/migrations/
 Seed rôles + admin + settings       backend/database/seeders/
 Règles métier                       backend/app/Services/{Module}/
+Éditabilité / workflow helpers      backend/app/Support/
 Endpoints HTTP                      backend/app/Http/Controllers/Api/
 Autorisations                       backend/app/Policies/
 Validation entrées                  backend/app/Http/Requests/
 Format JSON                         backend/app/Http/Resources/
+Events / Listeners                  backend/app/Events , Listeners
 Modèles                             backend/app/Models/
 Enums                               backend/app/Enums/
+IA Gemini                           backend/app/Services/Ai/
 Fichiers uploadés                   backend/storage/app/private/documents/
 Sauvegardes ZIP                     backend/storage/app/private/backups/
 Tests Pest                          backend/tests/Feature/{Module}/
@@ -406,6 +528,7 @@ Permissions UI                      frontend/src/lib/permissions.js
 Session                             frontend/src/stores/authStore.js
 Routes SPA                          frontend/src/routes/index.jsx
 Écran d’un domaine                  frontend/src/modules/{domaine}/
+Scénarios de recette                SCENARIOS-TESTS.md
 Specs métier                        Stage - L3/GED*.txt (hors ou à côté)
 
 
@@ -417,10 +540,12 @@ Specs métier                        Stage - L3/GED*.txt (hors ou à côté)
 2. password.changed      → mdp temporaire déjà changé
 3. Policy / permission   → rôle RBAC (hasPermission)
 4. Accès spécifiques     → partage document/dossier (+ héritage)
-5. État document         → archivé non modifiable, etc.
+5. État document         → archivé / en_validation non modifiable, etc.
 6. URL preview signée    → HMAC temporaire (sans Bearer)
+7. Rate limit login      → 5 échecs / 15 min
+8. MDP temporaire        → expiration 24 h + jamais exposé en API
 
-Permissions (slugs seed — ~28)
+Permissions (slugs seed — 29)
   users.view|create|update|delete
   roles.manage · permissions.manage
   departments.manage · projects.manage
@@ -442,8 +567,8 @@ Permissions (slugs seed — ~28)
 Après seed typique
   users    ≥ 1   admin@filebox.local / password
   roles    = 6
-  perms    ≈ 28
-  settings = 6
+  perms    = 29
+  settings ≥ 6
 
 Reset total (EFFACE les données)
   php artisan migrate:fresh --seed
@@ -456,6 +581,7 @@ Reset total (EFFACE les données)
 Backend — nouveau module
   Service + Controller Api + Requests + Resource + Policy
   + routes dans api.php (auth:sanctum + password.changed)
+  + Event/Listener si journal ou notif
   + tests Feature Pest
   Logique métier JAMAIS dans le controller
 
@@ -468,24 +594,26 @@ Frontend — nouveau module
 
 Transverse
   Corbeille (restore) = documents + dossiers uniquement
-  Autres entités soft-delete via SoftDeleteArchive (deleted_at + champs uniques libérés)
+  Autres entités soft-delete via SoftDeleteArchive
   Fichiers hors public/ ; métadonnées + chemin en BDD
-  Traitements lourds futurs (OCR, IA) → queues Laravel
+  IA Gemini : sync HTTP ; plafond GEMINI_MAX_BYTES
   Commentaires « ponytail: » = raccourci documenté (plafond + upgrade)
-  Tenir o.txt à jour à chaque sprint (état réel, pas d’intentions périmées)
+  Tenir o.txt à jour (état réel, pas d’intentions périmées)
 
 
 ================================================================================
 10. CE QUI N’EST PAS FAIT (VOLONTAIREMENT / PLUS TARD)
 ================================================================================
 
-- OCR (remplir versions.ocr_text) — recherche include_ocr déjà côté API/UI
-- Intelligence artificielle (suggestions, résumé, …) — emplacements UI prévus
-- Édition collaborative temps réel (OnlyOffice, etc.)
-  → is_editable + API content préparent le terrain
-- LDAP / SSO, signature électronique, recherche sémantique avancée
+- Édition collaborative temps réel (OnlyOffice, Collabora, M365)
+  → is_editable + API content préparent le terrain (formats texte seulement)
+- LDAP / SSO, signature électronique
+- Recherche sémantique / embeddings avancés
+- Indexation asynchrone lourde (PrepareDocumentForIndexing = hook stub)
+- Queue workers pour l’IA (aujourd’hui sync)
 - Logo EBA image dans le dépôt (BrandMark texte « FB » en attendant)
 - Tests E2E frontend (aujourd’hui : tests Feature backend Pest)
+- Scénarios manuels : voir SCENARIOS-TESTS.md
 
 
 ================================================================================
@@ -500,6 +628,9 @@ Transverse
   php artisan migrate:fresh --seed
   php artisan test
   php artisan route:list --path=api
+  php artisan schedule:work
+  php artisan accesses:revoke-expired
+  php artisan notifications:access-deadlines
   php artisan tinker
 
   # Frontend
@@ -513,47 +644,65 @@ Transverse
 12. CARTE MODULE ↔ API ↔ ÉCRAN (RAPIDE)
 ================================================================================
 
-Module              API principale                    Écran front
-------------------  --------------------------------  --------------------------
-Auth                /api/auth/*                       /login, /change-password
-Dashboard           /api/dashboard                    /dashboard
-Dossiers/Docs       /api/folders, /api/documents      /explorer, /documents/:id
-Recherche           /api/search                       /search
-Users               /api/users                        /users
-Rôles               /api/roles, /permissions          /roles
-Départements        /api/departments                  /departments
-Projets             /api/projects (+ members)         /projects, /projects/:id
-Workflows           /api/workflows                    /workflows, /workflows/:id
-Validations         /api/documents/.../workflow       onglet Validations
-Types               /api/document-types               /document-types
-Tags                /api/tags                         /tags
-Commentaires        /api/documents/.../comments       onglet Commentaires
-Accès               /api/accesses, .../accesses       /shared + onglet Partage
-Notifications       /api/notifications                /notifications (+ badge)
-Settings            /api/settings                     /settings
-Backups             /api/backups                      /backups
-Activity            /api/activity-logs                /activity
-Corbeille           docs/folders ?trashed=1 + restore /trash
-Preview signée      /api/signed/documents/...         bouton Aperçu
+Module              API principale                         Écran front
+------------------  -------------------------------------  --------------------------
+Auth                /api/auth/*                            /login, /change-password
+Dashboard           /api/dashboard                         /dashboard
+Dossiers/Docs       /api/folders, /api/documents           /explorer, /documents/:id
+Propose/Publish     .../propose , .../publish              fiche doc + /proposed
+Versions/Compare    .../versions , .../versions/compare    onglet Versions
+IA Gemini           .../ai/summarize|analyze|ocr           Assistant IA (fiche)
+Favoris             /api/favorites , .../favorite          ★ explorateur / fiche
+Recherche           /api/search                            /search
+Users               /api/users                             /users
+Rôles               /api/roles, /permissions               /roles
+Départements        /api/departments                       /departments
+Projets             /api/projects (+ members)              /projects, /projects/:id
+Workflows           /api/workflows                         /workflows, /workflows/:id
+Validations + SLA   /api/documents/.../workflow (+ deadlines) onglet Validations
+Types               /api/document-types                    /document-types
+Tags                /api/tags                              /tags
+Commentaires        /api/documents/.../comments            onglet Commentaires
+Accès               /api/accesses, .../accesses            /shared + onglet Partage
+Notifications       /api/notifications                     /notifications (+ badge)
+Settings            /api/settings                          /settings
+Backups             /api/backups                           /backups
+Activity            /api/activity-logs                     /activity
+Corbeille           docs/folders ?trashed=1 + restore      /trash
+Preview signée      /api/signed/documents/...              bouton Aperçu
 
 
 ================================================================================
-13. RÉSUMÉ POUR UN NOUVEAU DEV
+13. CYCLE MÉTIER DOCUMENT (RÉSUMÉ)
 ================================================================================
 
-1. Lire ce fichier en entier
-2. Configurer PostgreSQL dans backend/.env
+1. Upload dans un dossier (projet ou perso)
+2. Métadonnées / tags / éventuelle édition .txt
+3. Si projet public : proposer → manager démarre workflow (+ délais SLA)
+4. Validateurs approuvent / rejettent (motif) / demandent correction
+5. Document valide → publier
+6. Partages, commentaires, favoris, IA (résumé/OCR) tout au long
+7. Archiver / soft-delete → corbeille → restore
+
+
+================================================================================
+14. RÉSUMÉ POUR UN NOUVEAU DEV
+================================================================================
+
+1. Lire ce fichier en entier (+ SCENARIOS-TESTS.md pour la recette)
+2. Configurer PostgreSQL (+ Gemini / Mail optionnels) dans backend/.env
 3. migrate + db:seed
-4. php artisan serve  +  npm run dev
+4. php artisan serve  +  npm run dev  (+ schedule:work si tests accès)
 5. Se connecter admin@filebox.local / password
-6. Backend : règle métier → Service ; droit → Policy + seeder
+6. Backend : règle métier → Service ; droit → Policy + seeder ;
+   effets → Event/Listener
 7. Front : domaine → modules/{domaine}/api.js + page + permission exacte
 8. Avant de coder : YAGNI, controller mince, un test Feature
 9. Après un sprint : mettre à jour CE fichier (o.txt)
 
 Le document est le centre. Tout le reste (dossiers, versions, workflows,
-droits, notifications) gravite autour.
+droits, notifications, IA, favoris) gravite autour.
 
 ================================================================================
-  Fin de o.txt — FileBox
+  Fin de o.txt — FileBox — 27 juillet 2026
 ================================================================================

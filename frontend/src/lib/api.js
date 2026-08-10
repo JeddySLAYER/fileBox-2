@@ -20,11 +20,21 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     const status = error.response?.status
-    const message = error.response?.data?.message
+    const data = error.response?.data
+    const message = data?.message
 
     // Middleware password.changed → forcer le changement de mot de passe
     if (status === 403 && typeof message === 'string' && message.toLowerCase().includes('mot de passe')) {
       useAuthStore.getState().setMustChangePassword(true)
+    }
+
+    // Compte désactivé (middleware active) → fin de session
+    if (status === 401 && (data?.account_disabled || (typeof message === 'string' && message.toLowerCase().includes('désactivé')))) {
+      useAuthStore.getState().clearSession()
+      if (window.location.pathname !== '/login') {
+        window.location.assign('/login')
+      }
+      return Promise.reject(error)
     }
 
     if (status === 401) {
@@ -46,9 +56,22 @@ export function getErrorMessage(error, fallback = 'Une erreur est survenue.') {
 
   if (data.errors && typeof data.errors === 'object') {
     const first = Object.values(data.errors).flat()[0]
-    if (first) return String(first)
+    if (first) {
+      const raw = String(first)
+      // Laravel renvoie parfois la clé de traduction brute (locale FR absente)
+      if (raw === 'validation.uploaded' || raw.endsWith('validation.uploaded')) {
+        return 'Échec de l’envoi du fichier (taille max PHP, connexion interrompue, ou fichier invalide).'
+      }
+      return raw
+    }
   }
 
-  if (data.message) return String(data.message)
+  if (data.message) {
+    const msg = String(data.message)
+    if (msg === 'validation.uploaded') {
+      return 'Échec de l’envoi du fichier (taille max PHP, connexion interrompue, ou fichier invalide).'
+    }
+    return msg
+  }
   return fallback
 }

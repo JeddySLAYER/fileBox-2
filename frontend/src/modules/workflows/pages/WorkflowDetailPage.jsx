@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Save, Trash2 } from 'lucide-react'
@@ -29,19 +29,31 @@ function emptyStep(order = 1) {
   }
 }
 
+function buildFormFromWorkflow(workflow) {
+  return {
+    name: workflow.name ?? '',
+    code: workflow.code ?? '',
+    description: workflow.description ?? '',
+    is_active: Boolean(workflow.is_active),
+    steps:
+      (workflow.steps ?? []).length > 0
+        ? workflow.steps.map((s, i) => ({
+            name: s.name,
+            step_order: s.step_order ?? i + 1,
+            responsible_role_id: s.responsible_role?.id ?? '',
+            is_mandatory: s.is_mandatory ?? true,
+            description: s.description ?? '',
+          }))
+        : [emptyStep()],
+  }
+}
+
 export default function WorkflowDetailPage() {
   const { id } = useParams()
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
   const canEdit = can(user, 'workflows.manage')
-
-  const [form, setForm] = useState({
-    name: '',
-    code: '',
-    description: '',
-    is_active: true,
-    steps: [emptyStep()],
-  })
+  const [formDraft, setFormDraft] = useState(null)
 
   const { data: workflow, isLoading, isError } = useQuery({
     queryKey: queryKeys.workflow(id),
@@ -55,29 +67,10 @@ export default function WorkflowDetailPage() {
     enabled: canEdit,
   })
 
-  useEffect(() => {
-    if (!workflow) return
-    setForm({
-      name: workflow.name ?? '',
-      code: workflow.code ?? '',
-      description: workflow.description ?? '',
-      is_active: Boolean(workflow.is_active),
-      steps:
-        (workflow.steps ?? []).length > 0
-          ? workflow.steps.map((s, i) => ({
-              name: s.name,
-              step_order: s.step_order ?? i + 1,
-              responsible_role_id: s.responsible_role?.id ?? '',
-              is_mandatory: s.is_mandatory ?? true,
-              description: s.description ?? '',
-            }))
-          : [emptyStep()],
-    })
-  }, [workflow])
-
   const save = useMutation({
-    mutationFn: () =>
-      workflowsApi.update(id, {
+    mutationFn: () => {
+      const form = formDraft ?? buildFormFromWorkflow(workflow)
+      return workflowsApi.update(id, {
         name: form.name,
         code: form.code || undefined,
         description: form.description || null,
@@ -89,9 +82,11 @@ export default function WorkflowDetailPage() {
           is_mandatory: Boolean(s.is_mandatory),
           description: s.description || null,
         })),
-      }),
+      })
+    },
     onSuccess: (res) => {
       toast.success(res.message)
+      setFormDraft(null)
       queryClient.invalidateQueries({ queryKey: queryKeys.workflow(id) })
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
     },
@@ -102,6 +97,9 @@ export default function WorkflowDetailPage() {
 
   if (isLoading) return <LoadingScreen />
   if (isError || !workflow) return <EmptyState title="Workflow introuvable" />
+
+  const form = formDraft ?? buildFormFromWorkflow(workflow)
+  const setForm = (next) => setFormDraft(typeof next === 'function' ? next(form) : next)
 
   return (
     <>

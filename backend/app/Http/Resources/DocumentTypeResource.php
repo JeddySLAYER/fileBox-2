@@ -16,6 +16,8 @@ class DocumentTypeResource extends JsonResource
             'name' => $this->name,
             'slug' => $this->slug,
             'description' => $this->description,
+            'default_workflow_id' => $this->default_workflow_id,
+            'requires_workflow' => $this->requires_workflow,
             'default_workflow' => $this->whenLoaded('defaultWorkflow', fn () => $this->defaultWorkflow ? [
                 'id' => $this->defaultWorkflow->id,
                 'code' => $this->defaultWorkflow->code,

@@ -26,7 +26,6 @@ class UpdateDocumentRequest extends FormRequest
             'workflow_id' => ['nullable', 'integer', 'exists:workflows,id'],
             'owner_id' => ['sometimes', 'integer', 'exists:users,id'],
             'confidentiality' => ['sometimes', Rule::enum(ConfidentialityLevel::class)],
-            'is_editable' => ['sometimes', 'boolean'],
             'language' => ['nullable', 'string', 'max:10'],
             'tag_ids' => ['sometimes', 'array'],
             'tag_ids.*' => ['integer', 'exists:tags,id'],

@@ -17,7 +17,9 @@ class StoreAccessRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'user_id' => ['required', 'integer', 'exists:users,id'],
+            'user_id' => ['required_without:user_ids', 'integer', 'exists:users,id'],
+            'user_ids' => ['required_without:user_id', 'array', 'min:1'],
+            'user_ids.*' => ['integer', 'exists:users,id', 'distinct'],
             'abilities' => ['required', 'array', 'min:1'],
             'abilities.*' => ['string', Rule::enum(AccessAbility::class)],
             'starts_at' => ['nullable', 'date'],

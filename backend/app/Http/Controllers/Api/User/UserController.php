@@ -39,8 +39,7 @@ class UserController extends Controller
         return response()->json([
             'message' => $result['mail_sent']
                 ? 'Utilisateur créé. Un mot de passe temporaire a été envoyé par e-mail.'
-                : 'Utilisateur créé, mais l\'e-mail n\'a pas pu être envoyé. Utilisez le mot de passe temporaire affiché.',
-            'temporary_password' => $result['temporary_password'],
+                : 'Utilisateur créé, mais l\'e-mail n\'a pas pu être envoyé. Vérifiez la configuration mail ou réinitialisez le mot de passe.',
             'mail_sent' => $result['mail_sent'],
             'user' => new UserResource($result['user']),
         ], 201);
@@ -89,8 +88,7 @@ class UserController extends Controller
         return response()->json([
             'message' => $result['mail_sent']
                 ? 'Mot de passe temporaire régénéré et envoyé par e-mail.'
-                : 'Mot de passe temporaire régénéré, mais l\'e-mail n\'a pas pu être envoyé.',
-            'temporary_password' => $result['temporary_password'],
+                : 'Mot de passe temporaire régénéré, mais l\'e-mail n\'a pas pu être envoyé. Vérifiez la configuration mail.',
             'mail_sent' => $result['mail_sent'],
             'user' => new UserResource($result['user']),
         ]);

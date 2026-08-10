@@ -17,6 +17,8 @@ use Illuminate\Database\Eloquent\SoftDeletes;
     'title',
     'description',
     'summary',
+    'ai_analysis',
+    'ai_processed_at',
     'folder_id',
     'project_id',
     'department_id',
@@ -42,6 +44,7 @@ class Document extends Model
             'confidentiality' => ConfidentialityLevel::class,
             'is_editable' => 'boolean',
             'archived_at' => 'datetime',
+            'ai_processed_at' => 'datetime',
         ];
     }
 
@@ -108,5 +111,10 @@ class Document extends Model
     public function accesses(): MorphMany
     {
         return $this->morphMany(Access::class, 'accessible');
+    }
+
+    public function favorites(): MorphMany
+    {
+        return $this->morphMany(Favorite::class, 'favoritable');
     }
 }

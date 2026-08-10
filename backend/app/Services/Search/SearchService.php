@@ -40,7 +40,8 @@ class SearchService
 
         if (! empty($filters['q'])) {
             $q = mb_strtolower($filters['q']);
-            $includeOcr = filter_var($filters['include_ocr'] ?? true, FILTER_VALIDATE_BOOLEAN);
+            // OCR = extraction de contenu scanné, pas le moteur de recherche (opt-in via include_ocr)
+            $includeOcr = filter_var($filters['include_ocr'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
             $query->where(function ($builder) use ($q, $includeOcr) {
                 $builder->whereRaw('LOWER(title) LIKE ?', ["%{$q}%"])

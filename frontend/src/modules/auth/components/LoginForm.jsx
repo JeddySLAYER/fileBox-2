@@ -8,16 +8,27 @@ import { getErrorMessage } from '@/lib/api'
 import { authApi } from '@/modules/auth/api'
 import { useAuthStore } from '@/stores/authStore'
 
+function parseLoginMeta(error) {
+  const login = error?.response?.data?.login
+  if (!login || typeof login !== 'object') return null
+  return login
+}
+
 export default function LoginForm() {
   const navigate = useNavigate()
   const setSession = useAuthStore((s) => s.setSession)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
+  const [formError, setFormError] = useState('')
+  const [loginMeta, setLoginMeta] = useState(null)
 
   async function onSubmit(e) {
     e.preventDefault()
     setLoading(true)
+    setFormError('')
+    setLoginMeta(null)
+
     try {
       const data = await authApi.login({
         email,
@@ -39,11 +50,26 @@ export default function LoginForm() {
         navigate('/dashboard', { replace: true })
       }
     } catch (error) {
-      toast.error(getErrorMessage(error, 'Identifiants invalides.'))
+      const meta = parseLoginMeta(error)
+      const message = getErrorMessage(error, 'Identifiants incorrects.')
+
+      // Feedback sur le formulaire (pas de toast / info-bulle)
+      setFormError(message)
+      setLoginMeta(meta)
     } finally {
       setLoading(false)
     }
   }
+
+  const showAttempts =
+    loginMeta &&
+    !loginMeta.locked &&
+    typeof loginMeta.attempts_made === 'number' &&
+    loginMeta.attempts_made >= 2 &&
+    typeof loginMeta.attempts_remaining === 'number'
+
+  const locked = Boolean(loginMeta?.locked)
+  const retryMinutes = loginMeta?.retry_after_minutes
 
   return (
     <form onSubmit={onSubmit} className="mt-8 space-y-4">
@@ -56,7 +82,7 @@ export default function LoginForm() {
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="admin@filebox.local"
+          placeholder="email@entreprise.com"
         />
       </div>
       <div>
@@ -70,6 +96,28 @@ export default function LoginForm() {
           onChange={(e) => setPassword(e.target.value)}
         />
       </div>
+
+      {formError ? (
+        <div
+          role="alert"
+          className="rounded-lg border border-accent-foreground/20 bg-accent px-3.5 py-3 text-sm text-accent-foreground"
+        >
+          <p className="font-medium">{formError}</p>
+          {showAttempts ? (
+            <p className="mt-1.5 text-accent-foreground/90">
+              {loginMeta.attempts_remaining === 1
+                ? '1 essai restant avant verrouillage.'
+                : `${loginMeta.attempts_remaining} essais restants avant verrouillage.`}
+            </p>
+          ) : null}
+          {locked && retryMinutes != null ? (
+            <p className="mt-1.5 text-accent-foreground/90">
+              Réessayez dans {retryMinutes} minute{retryMinutes > 1 ? 's' : ''}.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
       <Button type="submit" className="w-full" disabled={loading}>
         {loading ? 'Connexion…' : 'Se connecter'}
       </Button>

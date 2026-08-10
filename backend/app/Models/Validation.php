@@ -13,6 +13,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
     'user_id',
     'status',
     'comment',
+    'sla_hours',
+    'due_at',
     'validated_at',
 ])]
 class Validation extends Model
@@ -22,6 +24,8 @@ class Validation extends Model
         return [
             'status' => ValidationStatus::class,
             'validated_at' => 'datetime',
+            'due_at' => 'datetime',
+            'sla_hours' => 'integer',
         ];
     }
 

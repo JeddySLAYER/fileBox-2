@@ -4,14 +4,10 @@ namespace App\Notifications;
 
 use App\Models\Document;
 use App\Models\Validation;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 
-class ValidationActionNotification extends Notification implements ShouldQueue
+class ValidationActionNotification extends Notification
 {
-    use Queueable;
-
     public function __construct(
         private readonly Document $document,
         private readonly Validation $validation,
@@ -28,16 +24,26 @@ class ValidationActionNotification extends Notification implements ShouldQueue
     public function toArray(object $notifiable): array
     {
         $labels = [
-            'started' => 'Un workflow de validation a démarré',
-            'approved' => 'Une étape de validation a été approuvée',
-            'rejected' => 'Le document a été rejeté',
-            'correction_requested' => 'Une correction a été demandée',
+            'started' => 'Validation requise',
+            'approved' => 'Étape de validation approuvée',
+            'rejected' => 'Document rejeté',
+            'correction_requested' => 'Correction demandée',
+            'completed' => 'Workflow de validation terminé',
         ];
+
+        $stepName = $this->validation->workflowStep?->name;
+
+        $message = match ($this->action) {
+            'started' => "Votre action est attendue sur « {$this->document->title} »"
+                .($stepName ? " (étape : {$stepName})" : '').'.',
+            'completed' => "Le document « {$this->document->title} » a été validé.",
+            default => ($labels[$this->action] ?? 'Mise à jour de validation')." — « {$this->document->title} ».",
+        };
 
         return [
             'type' => 'validation.'.$this->action,
             'title' => $labels[$this->action] ?? 'Mise à jour de validation',
-            'message' => ($labels[$this->action] ?? 'Mise à jour')." — « {$this->document->title} ».",
+            'message' => $message,
             'document_id' => $this->document->id,
             'validation_id' => $this->validation->id,
             'status' => $this->validation->status?->value ?? $this->validation->status,

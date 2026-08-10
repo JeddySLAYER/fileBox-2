@@ -2,9 +2,10 @@
 
 namespace App\Http\Controllers\Api\Setting;
 
+use App\Events\Settings\SettingsBulkUpdated;
+use App\Events\Settings\SettingsUpdated;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\SystemSettingResource;
-use App\Services\ActivityLog\ActivityLogService;
 use App\Services\Setting\SettingService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,7 +16,6 @@ class SettingController extends Controller
 {
     public function __construct(
         private readonly SettingService $settingService,
-        private readonly ActivityLogService $activityLog,
     ) {}
 
     public function index(Request $request): AnonymousResourceCollection
@@ -50,12 +50,7 @@ class SettingController extends Controller
 
         $setting = $this->settingService->upsert($data['key'], $data);
 
-        $this->activityLog->log(
-            action: 'settings.updated',
-            user: $request->user(),
-            description: "Paramètre mis à jour : {$data['key']}",
-            properties: ['key' => $data['key']],
-        );
+        event(new SettingsUpdated($request->user(), $data['key']));
 
         return response()->json([
             'message' => 'Paramètre enregistré.',
@@ -76,12 +71,7 @@ class SettingController extends Controller
 
         $settings = $this->settingService->upsertMany($data['settings']);
 
-        $this->activityLog->log(
-            action: 'settings.bulk_updated',
-            user: $request->user(),
-            description: 'Mise à jour groupée des paramètres système',
-            properties: ['keys' => array_keys($data['settings'])],
-        );
+        event(new SettingsBulkUpdated($request->user(), array_keys($data['settings'])));
 
         return response()->json([
             'message' => 'Paramètres mis à jour.',

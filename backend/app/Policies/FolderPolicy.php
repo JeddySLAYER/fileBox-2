@@ -20,8 +20,18 @@ class FolderPolicy
 
     public function view(User $actor, Folder $folder): bool
     {
-        return $actor->hasPermission('folders.view')
-            || $this->accessService->userCan($actor, $folder, 'view');
+        if ($actor->hasPermission('folders.view')
+            || $this->accessService->userCan($actor, $folder, 'view')) {
+            return true;
+        }
+
+        if ($folder->project_id) {
+            $folder->loadMissing('project');
+
+            return $folder->project?->isParticipant($actor) ?? false;
+        }
+
+        return false;
     }
 
     public function create(User $actor): bool

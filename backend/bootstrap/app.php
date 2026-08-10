@@ -20,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'verified' => \App\Http\Middleware\EnsureEmailIsVerified::class,
             'password.changed' => \App\Http\Middleware\EnsurePasswordIsChanged::class,
+            'active' => \App\Http\Middleware\EnsureUserIsActive::class,
         ]);
 
         //

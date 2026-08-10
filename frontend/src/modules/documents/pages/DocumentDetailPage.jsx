@@ -1,16 +1,23 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import {
   Archive,
   ArrowLeft,
   Download,
   Eye,
+  FileSearch,
+  PenLine,
+  Pencil,
   Save,
+  ScanText,
+  Sparkles,
+  Star,
   Trash2,
   Upload,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import Tabs from '@/components/ui/Tabs'
 import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
@@ -19,42 +26,62 @@ import EmptyState from '@/components/ui/EmptyState'
 import Input from '@/components/ui/Input'
 import Label from '@/components/ui/Label'
 import LoadingScreen from '@/components/ui/LoadingScreen'
+import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import DocumentAccessPanel from '@/modules/access/components/DocumentAccessPanel'
+import DocumentViewer from '@/modules/documents/components/DocumentViewer'
 import DocumentCommentsPanel from '@/modules/comments/components/DocumentCommentsPanel'
 import DocumentValidationsPanel from '@/modules/validations/components/DocumentValidationsPanel'
-import api, { getErrorMessage } from '@/lib/api'
+import { getErrorMessage } from '@/lib/api'
 import { unwrapList } from '@/lib/apiHelpers'
+import { documentAiCapabilities } from '@/lib/documentAi'
+import { fileVisual } from '@/lib/fileIcons'
 import { formatBytes, formatDate, statusLabel } from '@/lib/format'
 import { can, canAny } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { downloadDocument, documentsApi } from '@/modules/documents/api'
 import { documentTypesApi } from '@/modules/document-types/api'
+import { favoritesApi } from '@/modules/favorites/api'
 import { tagsApi } from '@/modules/tags/api'
 import { useAuthStore } from '@/stores/authStore'
 
 function statusTone(status) {
   if (status === 'valide' || status === 'publie') return 'success'
-  if (status === 'en_validation') return 'warning'
+  if (status === 'en_validation' || status === 'propose') return 'warning'
   if (status === 'rejete') return 'danger'
   return 'neutral'
 }
 
 export default function DocumentDetailPage() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
-  const [tab, setTab] = useState('overview')
-  const [meta, setMeta] = useState({ title: '', description: '', document_type_id: '', is_editable: false })
-  const [tagIds, setTagIds] = useState([])
+  const confirm = useConfirm()
+  const [tab, setTab] = useState(searchParams.get('tab') || 'overview')
+  const [metaDraft, setMetaDraft] = useState(null)
+  const [tagIdsDraft, setTagIdsDraft] = useState(null)
   const [versionFile, setVersionFile] = useState(null)
   const [content, setContent] = useState('')
+  const [compareLeft, setCompareLeft] = useState('')
+  const [compareRight, setCompareRight] = useState('')
+  const [comparison, setComparison] = useState(null)
+  const [ocrPreview, setOcrPreview] = useState('')
+  const [showViewer, setShowViewer] = useState(false)
+  const [editing, setEditing] = useState(false)
 
   const { data: document, isLoading, isError } = useQuery({
     queryKey: queryKeys.document(id),
     queryFn: () => documentsApi.get(id),
     enabled: Boolean(id),
   })
+
+  useEffect(() => {
+    setEditing(false)
+    setMetaDraft(null)
+    setTagIdsDraft(null)
+    setOcrPreview('')
+  }, [id])
 
   const versionsQuery = useQuery({
     queryKey: queryKeys.documentVersions(id),
@@ -65,25 +92,14 @@ export default function DocumentDetailPage() {
   const typesQuery = useQuery({
     queryKey: queryKeys.documentTypes({}),
     queryFn: () => documentTypesApi.list(),
-    enabled: can(user, 'documents.update'),
+    enabled: editing && can(user, 'documents.update'),
   })
 
   const tagsQuery = useQuery({
     queryKey: queryKeys.tags,
     queryFn: tagsApi.list,
-    enabled: can(user, 'tags.manage') || can(user, 'documents.update'),
+    enabled: editing && can(user, 'tags.manage'),
   })
-
-  useEffect(() => {
-    if (!document) return
-    setMeta({
-      title: document.title ?? '',
-      description: document.description ?? '',
-      document_type_id: document.document_type?.id ?? '',
-      is_editable: Boolean(document.is_editable),
-    })
-    setTagIds((document.tags ?? []).map((t) => t.id))
-  }, [document])
 
   useEffect(() => {
     if (tab !== 'content' || !document?.is_editable) return
@@ -99,16 +115,25 @@ export default function DocumentDetailPage() {
   }
 
   const saveMeta = useMutation({
-    mutationFn: () =>
-      documentsApi.update(id, {
+    mutationFn: () => {
+      const meta = metaDraft ?? {
+        title: document.title ?? '',
+        description: document.description ?? '',
+        document_type_id: document.document_type?.id ?? '',
+      }
+      const tagIds = tagIdsDraft ?? (document.tags ?? []).map((t) => t.id)
+      return documentsApi.update(id, {
         title: meta.title,
         description: meta.description || null,
         document_type_id: meta.document_type_id ? Number(meta.document_type_id) : null,
-        is_editable: meta.is_editable,
         tag_ids: tagIds,
-      }),
+      })
+    },
     onSuccess: (res) => {
       toast.success(res.message)
+      setMetaDraft(null)
+      setTagIdsDraft(null)
+      setEditing(false)
       invalidateDoc()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
@@ -123,8 +148,16 @@ export default function DocumentDetailPage() {
     onSuccess: (res) => {
       toast.success(res.message)
       setVersionFile(null)
+      setComparison(null)
       invalidateDoc()
     },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const compareVersions = useMutation({
+    mutationFn: () =>
+      documentsApi.compareVersions(id, Number(compareLeft), Number(compareRight)),
+    onSuccess: (data) => setComparison(data),
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
@@ -158,6 +191,50 @@ export default function DocumentDetailPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
+  const toggleFavorite = useMutation({
+    mutationFn: () =>
+      document.is_favorited
+        ? favoritesApi.removeDocument(id)
+        : favoritesApi.addDocument(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateDoc()
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
+      queryClient.invalidateQueries({ queryKey: queryKeys.favorites })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const aiSummarize = useMutation({
+    mutationFn: () => documentsApi.aiSummarize(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const aiAnalyze = useMutation({
+    mutationFn: () => documentsApi.aiAnalyze(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const aiOcr = useMutation({
+    mutationFn: () => documentsApi.aiOcr(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      setOcrPreview(res.ocr_text ?? '')
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const aiBusy = aiSummarize.isPending || aiAnalyze.isPending || aiOcr.isPending
+
   async function handleDownload() {
     try {
       await downloadDocument(id, document?.current_version?.file_name ?? 'document')
@@ -166,23 +243,26 @@ export default function DocumentDetailPage() {
     }
   }
 
-  async function handlePreview() {
-    try {
-      const response = await api.get(`/documents/${id}/preview`, { responseType: 'blob' })
-      const url = window.URL.createObjectURL(response.data)
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } catch (error) {
-      toast.error(getErrorMessage(error, 'Prévisualisation impossible.'))
-    }
-  }
-
   if (isLoading) return <LoadingScreen />
   if (isError || !document) return <EmptyState title="Document introuvable" />
 
   const version = document.current_version
+  const visual = fileVisual(document)
+  const VisualIcon = visual.Icon
+  const ai = documentAiCapabilities(version?.mime_type, version?.extension)
   const types = unwrapList(typesQuery.data)
   const tags = unwrapList(tagsQuery.data)
   const versions = unwrapList(versionsQuery.data)
+
+  const meta = metaDraft ?? {
+    title: document.title ?? '',
+    description: document.description ?? '',
+    document_type_id: document.document_type?.id ?? '',
+  }
+  const tagIds = tagIdsDraft ?? (document.tags ?? []).map((t) => t.id)
+
+  const setMeta = (next) => setMetaDraft(typeof next === 'function' ? next(meta) : next)
+  const setTagIds = (next) => setTagIdsDraft(typeof next === 'function' ? next(tagIds) : next)
 
   const tabs = [
     { id: 'overview', label: 'Aperçu' },
@@ -206,13 +286,38 @@ export default function DocumentDetailPage() {
               <ArrowLeft className="h-4 w-4" />
               Explorateur
             </Button>
-            <Button variant="secondary" size="sm" onClick={handlePreview}>
+            <Button variant="secondary" size="sm" onClick={() => setShowViewer(true)}>
               <Eye className="h-4 w-4" />
               Aperçu
             </Button>
             <Button size="sm" onClick={handleDownload}>
               <Download className="h-4 w-4" />
               Télécharger
+            </Button>
+            {document.is_editable &&
+            document.status !== 'archive' &&
+            can(user, 'documents.update') ? (
+              <Button size="sm" variant="secondary" onClick={() => setTab('content')}>
+                <Pencil className="h-4 w-4" />
+                Éditer
+              </Button>
+            ) : null}
+            {can(user, 'documents.update') && document.status !== 'archive' ? (
+              <Button size="sm" variant="secondary" onClick={() => setEditing(true)}>
+                <PenLine className="h-4 w-4" />
+                Modifier
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={toggleFavorite.isPending}
+              onClick={() => toggleFavorite.mutate()}
+            >
+              <Star
+                className={`h-4 w-4 ${document.is_favorited ? 'fill-current text-amber-500' : ''}`}
+              />
+              {document.is_favorited ? 'Retirer' : 'Favori'}
             </Button>
             {can(user, 'documents.archive') ? (
               <Button size="sm" variant="secondary" onClick={() => archive.mutate()}>
@@ -224,8 +329,13 @@ export default function DocumentDetailPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => {
-                  if (window.confirm('Mettre ce document en corbeille ?')) removeDoc.mutate()
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: 'Mettre à la corbeille',
+                    description: 'Mettre ce document en corbeille ? Vous pourrez le restaurer ensuite.',
+                    confirmLabel: 'Mettre à la corbeille',
+                  })
+                  if (ok) removeDoc.mutate()
                 }}
               >
                 <Trash2 className="h-4 w-4" />
@@ -237,149 +347,288 @@ export default function DocumentDetailPage() {
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
+      <Modal
+        open={showViewer}
+        onClose={() => setShowViewer(false)}
+        title="Aperçu du document"
+        description={version?.file_name ?? document.title}
+        size="full"
+        className="max-h-[94vh]"
+      >
+        <DocumentViewer
+          documentId={id}
+          mimeType={version?.mime_type}
+          extension={version?.extension}
+          fileName={version?.file_name}
+          heightClass="h-[min(78vh,720px)]"
+          onDownload={handleDownload}
+        />
+      </Modal>
+
       <div className="mt-6">
         {tab === 'overview' ? (
-          <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
-            <Card>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge tone={statusTone(document.status)}>{statusLabel(document.status)}</Badge>
-                {document.is_editable ? <Badge tone="primary">Éditable</Badge> : null}
-              </div>
-
-              {can(user, 'documents.update') && document.status !== 'archive' ? (
-                <form
-                  className="mt-5 space-y-3"
-                  onSubmit={(e) => {
-                    e.preventDefault()
-                    saveMeta.mutate()
-                  }}
+          <div className="space-y-4">
+            <Card className="overflow-hidden p-0">
+              <div className="flex min-w-0 items-start gap-4 p-5">
+                <span
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl"
+                  style={{ backgroundColor: `${visual.color}18`, color: visual.color }}
                 >
-                  <div>
-                    <Label>Titre</Label>
-                    <Input
-                      value={meta.title}
-                      onChange={(e) => setMeta({ ...meta, title: e.target.value })}
-                      required
-                    />
+                  <VisualIcon className="h-7 w-7" />
+                </span>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={statusTone(document.status)}>{statusLabel(document.status)}</Badge>
+                    {document.is_editable ? <Badge tone="primary">Éditable en ligne</Badge> : null}
+                    {document.is_favorited ? <Badge tone="warning">Favori</Badge> : null}
                   </div>
-                  <div>
-                    <Label>Description</Label>
-                    <Input
-                      value={meta.description}
-                      onChange={(e) => setMeta({ ...meta, description: e.target.value })}
-                    />
-                  </div>
-                  <div>
-                    <Label>Type</Label>
-                    <select
-                      className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm"
-                      value={meta.document_type_id}
-                      onChange={(e) => setMeta({ ...meta, document_type_id: e.target.value })}
-                    >
-                      <option value="">— Aucun —</option>
-                      {types.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={meta.is_editable}
-                      onChange={(e) => setMeta({ ...meta, is_editable: e.target.checked })}
-                    />
-                    Éditable en ligne
-                  </label>
-                  {can(user, 'tags.manage') || can(user, 'documents.update') ? (
-                    <div>
-                      <Label>Tags</Label>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {tags.map((tag) => (
-                          <label
-                            key={tag.id}
-                            className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-xs"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={tagIds.includes(tag.id)}
-                              onChange={() =>
-                                setTagIds((prev) =>
-                                  prev.includes(tag.id)
-                                    ? prev.filter((x) => x !== tag.id)
-                                    : [...prev, tag.id],
-                                )
-                              }
-                            />
-                            {tag.name}
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  <Button type="submit" size="sm" disabled={saveMeta.isPending}>
-                    <Save className="h-4 w-4" />
-                    Enregistrer
-                  </Button>
-                </form>
-              ) : (
-                <dl className="mt-5 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Auteur</dt>
-                    <dd className="mt-1 text-sm">{document.author?.name ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Type</dt>
-                    <dd className="mt-1 text-sm">{document.document_type?.name ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Confidentialité</dt>
-                    <dd className="mt-1 text-sm">{document.confidentiality ?? '—'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-muted-foreground">Créé le</dt>
-                    <dd className="mt-1 text-sm">{formatDate(document.created_at, true)}</dd>
-                  </div>
-                </dl>
-              )}
-
-              <div className="mt-6 rounded-lg border border-dashed border-border bg-muted/40 p-4">
-                <p className="text-xs font-medium">OCR & IA</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Emplacement réservé pour l&apos;extraction OCR et les suggestions IA.
-                </p>
+                  <p className="mt-2 truncate text-base font-semibold tracking-tight">
+                    {version?.file_name ?? document.title}
+                  </p>
+                  <p className="mt-0.5 text-sm text-muted-foreground">
+                    {[
+                      visual.label,
+                      version ? `v${version.version_number}` : null,
+                      version ? formatBytes(version.size) : null,
+                      document.folder?.name ? `Dossier · ${document.folder.name}` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </p>
+                </div>
               </div>
-            </Card>
 
-            <Card>
-              <h2 className="text-sm font-semibold">Version courante</h2>
-              {version ? (
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Fichier</dt>
-                    <dd className="truncate font-medium">{version.file_name}</dd>
+              <dl className="grid gap-px border-t border-border bg-border sm:grid-cols-2 lg:grid-cols-3">
+                {[
+                  { label: 'Référence', value: document.reference },
+                  { label: 'Auteur', value: document.author?.name },
+                  { label: 'Type documentaire', value: document.document_type?.name },
+                  { label: 'Confidentialité', value: document.confidentiality },
+                  { label: 'Créé le', value: formatDate(document.created_at, true) },
+                  {
+                    label: 'Modifié le',
+                    value: formatDate(document.updated_at ?? version?.created_at, true),
+                  },
+                ].map((row) => (
+                  <div key={row.label} className="bg-background px-5 py-3">
+                    <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                      {row.label}
+                    </dt>
+                    <dd className="mt-1 truncate text-sm">{row.value || '—'}</dd>
                   </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">N°</dt>
-                    <dd>v{version.version_number}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt className="text-muted-foreground">Taille</dt>
-                    <dd>{formatBytes(version.size)}</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="mt-4 text-sm text-muted-foreground">Aucune version.</p>
-              )}
+                ))}
+              </dl>
+
+              {document.description ? (
+                <div className="border-t border-border px-5 py-4">
+                  <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                    Description
+                  </p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed">
+                    {document.description}
+                  </p>
+                </div>
+              ) : null}
+
               {(document.tags ?? []).length > 0 ? (
-                <div className="mt-6 flex flex-wrap gap-1.5">
-                  {document.tags.map((tag) => (
+                <div className="flex flex-wrap gap-1.5 border-t border-border px-5 py-3">
+                  {(document.tags ?? []).map((tag) => (
                     <Badge key={tag.id}>{tag.name}</Badge>
                   ))}
                 </div>
               ) : null}
             </Card>
+
+            <Modal
+              open={editing}
+              onClose={() => {
+                setEditing(false)
+                setMetaDraft(null)
+                setTagIdsDraft(null)
+              }}
+              title="Modifier le document"
+              description="Titre, description, type et tags."
+              size="lg"
+              footer={
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setEditing(false)
+                      setMetaDraft(null)
+                      setTagIdsDraft(null)
+                    }}
+                  >
+                    Annuler
+                  </Button>
+                  <Button
+                    type="submit"
+                    form="edit-doc-meta-form"
+                    disabled={saveMeta.isPending || !meta.title.trim()}
+                  >
+                    Enregistrer
+                  </Button>
+                </>
+              }
+            >
+              <form
+                id="edit-doc-meta-form"
+                className="space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  saveMeta.mutate()
+                }}
+              >
+                <div>
+                  <Label>Titre</Label>
+                  <Input
+                    value={meta.title}
+                    onChange={(e) => setMeta({ ...meta, title: e.target.value })}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <Label>Description</Label>
+                  <Input
+                    value={meta.description}
+                    onChange={(e) => setMeta({ ...meta, description: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <Label>Type</Label>
+                  <select
+                    className="h-11 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                    value={meta.document_type_id}
+                    onChange={(e) => setMeta({ ...meta, document_type_id: e.target.value })}
+                  >
+                    <option value="">— Aucun —</option>
+                    {types.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {document.is_editable ? (
+                  <p className="text-xs text-muted-foreground">
+                    Pour modifier le contenu du fichier, utilisez le bouton Éditer (onglet Édition).
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Édition en ligne indisponible pour .{version?.extension ?? 'ce format'} — réuploadez
+                    une version texte (.txt, .md, .csv…) ou utilisez un fichier Office hors ligne.
+                  </p>
+                )}
+                {can(user, 'tags.manage') ? (
+                  <div>
+                    <Label>Tags</Label>
+                    <div className="mt-2 flex max-h-40 flex-wrap gap-2 overflow-y-auto">
+                      {tags.map((tag) => (
+                        <label
+                          key={tag.id}
+                          className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-xs"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={tagIds.includes(tag.id)}
+                            onChange={() =>
+                              setTagIds((prev) =>
+                                prev.includes(tag.id)
+                                  ? prev.filter((x) => x !== tag.id)
+                                  : [...prev, tag.id],
+                              )
+                            }
+                          />
+                          {tag.name}
+                        </label>
+                      ))}
+                      {!tags.length ? (
+                        <p className="text-xs text-muted-foreground">Aucun tag disponible.</p>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+              </form>
+            </Modal>
+
+            {ai.any ? (
+              <Card>
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-muted-foreground" />
+                  <h2 className="text-sm font-semibold">Assistant IA</h2>
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Disponible pour ce format
+                  {ai.ocr ? ' (texte, PDF ou image)' : ' (fichier texte)'}.
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {ai.summarize ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={aiBusy}
+                      onClick={() => aiSummarize.mutate()}
+                    >
+                      <FileSearch className="h-4 w-4" />
+                      Résumer
+                    </Button>
+                  ) : null}
+                  {ai.analyze ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={aiBusy}
+                      onClick={() => aiAnalyze.mutate()}
+                    >
+                      <Sparkles className="h-4 w-4" />
+                      Analyser / expliquer
+                    </Button>
+                  ) : null}
+                  {ai.ocr ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={aiBusy}
+                      onClick={() => aiOcr.mutate()}
+                    >
+                      <ScanText className="h-4 w-4" />
+                      OCR (scan / image)
+                    </Button>
+                  ) : null}
+                </div>
+
+                {document.summary ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-muted-foreground">Résumé</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{document.summary}</p>
+                  </div>
+                ) : null}
+
+                {document.ai_analysis ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-muted-foreground">Analyse</p>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">{document.ai_analysis}</p>
+                  </div>
+                ) : null}
+
+                {ocrPreview || version?.has_ocr ? (
+                  <div className="mt-4">
+                    <p className="text-xs font-medium text-muted-foreground">Texte OCR</p>
+                    <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-muted-foreground">
+                      {ocrPreview || 'OCR déjà extrait sur cette version (relancez pour réafficher).'}
+                    </p>
+                  </div>
+                ) : null}
+
+                {document.ai_processed_at ? (
+                  <p className="mt-3 text-[11px] text-muted-foreground">
+                    Dernière action IA : {formatDate(document.ai_processed_at, true)}
+                  </p>
+                ) : null}
+              </Card>
+            ) : null}
           </div>
         ) : null}
 
@@ -389,6 +638,9 @@ export default function DocumentDetailPage() {
             document.status !== 'archive' ? (
               <Card>
                 <Label>Nouvelle version (réupload)</Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  La version courante est verrouillée automatiquement avant création de la suivante.
+                </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Input
                     type="file"
@@ -406,25 +658,147 @@ export default function DocumentDetailPage() {
               </Card>
             ) : null}
 
+            {versions.length >= 2 ? (
+              <Card>
+                <h2 className="text-sm font-semibold">Comparer deux versions</h2>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <select
+                    className="h-11 min-w-[140px] rounded-lg border border-border bg-background px-3 text-sm"
+                    value={compareLeft}
+                    onChange={(e) => setCompareLeft(e.target.value)}
+                  >
+                    <option value="">Version A</option>
+                    {versions.map((v) => (
+                      <option key={`l-${v.id}`} value={v.id}>
+                        v{v.version_number}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="h-11 min-w-[140px] rounded-lg border border-border bg-background px-3 text-sm"
+                    value={compareRight}
+                    onChange={(e) => setCompareRight(e.target.value)}
+                  >
+                    <option value="">Version B</option>
+                    {versions.map((v) => (
+                      <option key={`r-${v.id}`} value={v.id}>
+                        v{v.version_number}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={
+                      !compareLeft ||
+                      !compareRight ||
+                      compareLeft === compareRight ||
+                      compareVersions.isPending
+                    }
+                    onClick={() => compareVersions.mutate()}
+                  >
+                    <Eye className="h-4 w-4" />
+                    Comparer
+                  </Button>
+                </div>
+
+                {comparison ? (
+                  <div className="mt-4 space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[comparison.left, comparison.right].map((v, idx) => (
+                        <div key={v.id} className="rounded-lg border border-border p-3 text-sm">
+                          <p className="font-medium">
+                            {idx === 0 ? 'A' : 'B'} — v{v.version_number}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {v.creator?.name ?? '—'} · {formatDate(v.created_at, true)}
+                          </p>
+                          <p className="mt-1 text-xs">{v.file_name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {formatBytes(v.size)} · {v.is_locked ? 'verrouillée' : 'courante'}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {Object.keys(comparison.metadata_diff ?? {}).length > 0 ? (
+                      <div>
+                        <p className="text-sm font-medium">Différences de métadonnées</p>
+                        <ul className="mt-2 space-y-1 text-xs">
+                          {Object.entries(comparison.metadata_diff).map(([key, value]) => (
+                            <li key={key} className="rounded border border-border px-2 py-1.5">
+                              <span className="font-medium">{key}</span>
+                              <span className="text-muted-foreground">
+                                {' '}
+                                : {String(value.left ?? '—')} → {String(value.right ?? '—')}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Métadonnées identiques.</p>
+                    )}
+
+                    {!comparison.content_comparable ? (
+                      <p className="text-xs text-muted-foreground">
+                        Différence de contenu non disponible pour ce type de fichier (binaire).
+                      </p>
+                    ) : comparison.content_identical ? (
+                      <p className="text-xs text-muted-foreground">Contenu identique.</p>
+                    ) : (
+                      <div>
+                        <p className="text-sm font-medium">Différence de contenu</p>
+                        <pre className="mt-2 max-h-72 overflow-auto rounded-lg border border-border bg-muted/30 p-3 text-xs leading-5">
+                          {(comparison.content_diff ?? []).map((line, i) => (
+                            <div
+                              key={`${line.type}-${i}`}
+                              className={
+                                line.type === 'add'
+                                  ? 'bg-emerald-500/15 text-emerald-800'
+                                  : line.type === 'remove'
+                                    ? 'bg-red-500/15 text-red-800'
+                                    : 'text-muted-foreground'
+                              }
+                            >
+                              {line.type === 'add' ? '+ ' : line.type === 'remove' ? '- ' : '  '}
+                              {line.text}
+                            </div>
+                          ))}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </Card>
+            ) : null}
+
             {versionsQuery.isLoading ? (
               <LoadingScreen />
             ) : versions.length === 0 ? (
               <EmptyState title="Aucune version" />
             ) : (
               <ul className="divide-y divide-border rounded-xl border border-border bg-background">
-                {versions.map((v) => (
-                  <li key={v.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium">
-                        v{v.version_number} — {v.file_name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatBytes(v.size)} · {formatDate(v.created_at, true)}
-                        {v.change_summary ? ` · ${v.change_summary}` : ''}
-                      </p>
-                    </div>
-                  </li>
-                ))}
+                {versions.map((v) => {
+                  const isCurrent = document.current_version?.id === v.id
+                  return (
+                    <li key={v.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                      <div>
+                        <p className="text-sm font-medium">
+                          v{v.version_number} — {v.file_name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatBytes(v.size)} · {formatDate(v.created_at, true)}
+                          {v.change_summary ? ` · ${v.change_summary}` : ''}
+                        </p>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {isCurrent ? <Badge tone="success">Courante</Badge> : null}
+                        {v.is_locked ? <Badge tone="neutral">Verrouillée</Badge> : null}
+                      </div>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -455,6 +829,10 @@ export default function DocumentDetailPage() {
           <DocumentValidationsPanel
             documentId={id}
             documentStatus={document.status}
+            documentWorkflow={document.workflow}
+            subjectToWorkflow={document.subject_to_workflow}
+            recommendsWorkflow={document.recommends_workflow}
+            canPropose={document.can_propose}
             onUpdated={invalidateDoc}
           />
         ) : null}

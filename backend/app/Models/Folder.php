@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -15,10 +16,18 @@ use Illuminate\Database\Eloquent\SoftDeletes;
     'project_id',
     'department_id',
     'created_by',
+    'is_project_root',
 ])]
 class Folder extends Model
 {
     use SoftDeletes;
+
+    protected function casts(): array
+    {
+        return [
+            'is_project_root' => 'boolean',
+        ];
+    }
 
     public function parent(): BelongsTo
     {
@@ -50,8 +59,18 @@ class Folder extends Model
         return $this->hasMany(Document::class);
     }
 
+    public function tags(): BelongsToMany
+    {
+        return $this->belongsToMany(Tag::class)->withTimestamps();
+    }
+
     public function accesses(): MorphMany
     {
         return $this->morphMany(Access::class, 'accessible');
+    }
+
+    public function favorites(): MorphMany
+    {
+        return $this->morphMany(Favorite::class, 'favoritable');
     }
 }

@@ -5,14 +5,11 @@ namespace App\Notifications;
 use App\Models\Access;
 use App\Models\Document;
 use App\Models\Folder;
-use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Notification;
 
-class AccessGrantedNotification extends Notification implements ShouldQueue
+// ponytail: sync — important notifs must land without queue worker
+class AccessGrantedNotification extends Notification
 {
-    use Queueable;
-
     public function __construct(
         private readonly Access $access,
     ) {}

@@ -5,6 +5,7 @@ namespace App\Enums;
 enum DocumentStatus: string
 {
     case Draft = 'brouillon';
+    case Proposed = 'propose';
     case InValidation = 'en_validation';
     case Validated = 'valide';
     case Published = 'publie';

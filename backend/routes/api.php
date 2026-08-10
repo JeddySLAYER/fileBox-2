@@ -7,8 +7,10 @@ use App\Http\Controllers\Api\Backup\BackupController;
 use App\Http\Controllers\Api\Comment\CommentController;
 use App\Http\Controllers\Api\Dashboard\DashboardController;
 use App\Http\Controllers\Api\Department\DepartmentController;
+use App\Http\Controllers\Api\Document\DocumentAiController;
 use App\Http\Controllers\Api\Document\DocumentController;
 use App\Http\Controllers\Api\DocumentType\DocumentTypeController;
+use App\Http\Controllers\Api\Favorite\FavoriteController;
 use App\Http\Controllers\Api\Folder\FolderController;
 use App\Http\Controllers\Api\Notification\NotificationController;
 use App\Http\Controllers\Api\Permission\PermissionController;
@@ -25,7 +27,7 @@ use Illuminate\Support\Facades\Route;
 Route::prefix('auth')->group(function () {
     Route::post('/login', [AuthController::class, 'login']);
 
-    Route::middleware('auth:sanctum')->group(function () {
+    Route::middleware(['auth:sanctum', 'active'])->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::put('/password', [AuthController::class, 'changePassword']);
@@ -37,7 +39,7 @@ Route::get('signed/documents/{document}/preview', [DocumentController::class, 's
     ->name('documents.preview.signed')
     ->middleware('signed');
 
-Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
+Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(function () {
     // Utilisateurs
     Route::get('users', [UserController::class, 'index']);
     Route::post('users', [UserController::class, 'store']);
@@ -75,6 +77,7 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::put('projects/{project}', [ProjectController::class, 'update']);
     Route::delete('projects/{project}', [ProjectController::class, 'destroy']);
     Route::put('projects/{project}/members', [ProjectController::class, 'syncMembers']);
+    Route::get('projects/{project}/member-candidates', [ProjectController::class, 'memberCandidates']);
 
     // Dossiers
     Route::get('folders', [FolderController::class, 'index']);
@@ -111,15 +114,23 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::put('documents/{document}/move', [DocumentController::class, 'move']);
     Route::post('documents/{document}/archive', [DocumentController::class, 'archive']);
     Route::post('documents/{document}/unarchive', [DocumentController::class, 'unarchive']);
+    Route::post('documents/{document}/publish', [DocumentController::class, 'publish']);
+    Route::post('documents/{document}/propose', [DocumentController::class, 'propose']);
     Route::get('documents/{document}/content', [DocumentController::class, 'content']);
     Route::put('documents/{document}/content', [DocumentController::class, 'saveContent']);
     Route::get('documents/{document}/versions', [DocumentController::class, 'versions']);
+    Route::get('documents/{document}/versions/compare', [DocumentController::class, 'compareVersions']);
     Route::post('documents/{document}/versions', [DocumentController::class, 'storeVersion']);
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);
     Route::get('documents/{document}/versions/{version}/download', [DocumentController::class, 'downloadVersion']);
     Route::get('documents/{document}/preview', [DocumentController::class, 'preview']);
     Route::get('documents/{document}/versions/{version}/preview', [DocumentController::class, 'previewVersion']);
     Route::get('documents/{document}/preview-url', [DocumentController::class, 'previewUrl']);
+
+    // IA (Gemini) — résumé / analyse / OCR
+    Route::post('documents/{document}/ai/summarize', [DocumentAiController::class, 'summarize']);
+    Route::post('documents/{document}/ai/analyze', [DocumentAiController::class, 'analyze']);
+    Route::post('documents/{document}/ai/ocr', [DocumentAiController::class, 'ocr']);
 
     // Commentaires (liés au document — RG-DOC-015)
     Route::get('documents/{document}/comments', [CommentController::class, 'index']);
@@ -141,6 +152,13 @@ Route::middleware(['auth:sanctum', 'password.changed'])->group(function () {
     Route::post('validations/{validation}/approve', [ValidationController::class, 'approve']);
     Route::post('validations/{validation}/reject', [ValidationController::class, 'reject']);
     Route::post('validations/{validation}/request-correction', [ValidationController::class, 'requestCorrection']);
+
+    // Favoris
+    Route::get('favorites', [FavoriteController::class, 'index']);
+    Route::post('documents/{document}/favorite', [FavoriteController::class, 'storeDocument']);
+    Route::delete('documents/{document}/favorite', [FavoriteController::class, 'destroyDocument']);
+    Route::post('folders/{folder}/favorite', [FavoriteController::class, 'storeFolder']);
+    Route::delete('folders/{folder}/favorite', [FavoriteController::class, 'destroyFolder']);
 
     // Accès spécifiques
     Route::get('accesses/mine', [AccessController::class, 'mine']);

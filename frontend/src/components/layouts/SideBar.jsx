@@ -3,6 +3,7 @@ import {
   Activity,
   Archive,
   Building2,
+  ClipboardList,
   FileType,
   FolderKanban,
   FolderOpen,
@@ -21,6 +22,7 @@ import BrandMark from '@/components/BrandMark'
 import { cn } from '@/lib/cn'
 import { can, canAny } from '@/lib/permissions'
 import { useAuthStore } from '@/stores/authStore'
+import logo from '../../assets/images/LogoEBA.png'
 
 const NAV = [
   {
@@ -37,13 +39,19 @@ const NAV = [
       { to: '/users', label: 'Utilisateurs', icon: Users, permission: 'users.view' },
       { to: '/roles', label: 'Rôles', icon: Shield, permission: 'roles.manage' },
       { to: '/departments', label: 'Départements', icon: Building2, permission: 'departments.manage' },
-      { to: '/projects', label: 'Projets', icon: FolderKanban, permission: 'projects.manage' },
+      { to: '/projects', label: 'Projets', icon: FolderKanban, anyOf: ['projects.view', 'projects.manage'] },
     ],
   },
   {
     label: 'Processus',
     items: [
       { to: '/workflows', label: 'Workflows', icon: GitBranch, permission: 'workflows.manage' },
+      {
+        to: '/proposed',
+        label: 'Proposés',
+        icon: ClipboardList,
+        anyOf: ['workflows.manage', 'projects.manage'],
+      },
       { to: '/document-types', label: 'Types docs', icon: FileType, permission: 'document_types.manage' },
       { to: '/tags', label: 'Tags', icon: Tags, permission: 'tags.manage' },
     ],
@@ -77,12 +85,8 @@ export default function Sidebar({ onNavigate, onLogout }) {
 
   return (
     <aside className="flex h-full w-64 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-      <div className="flex h-20 items-center gap-3 border-b border-sidebar-border px-5">
-        <BrandMark size="sm" />
-        <div>
-          <p className="text-sm font-semibold tracking-tight">fileBox</p>
-          <p className="text-[11px] text-muted-foreground">GED</p>
-        </div>
+      <div className="flex h-40 items-center gap-3 border-b border-sidebar-border px-5">
+        <img src={logo} alt="Logo e-BA" />
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">

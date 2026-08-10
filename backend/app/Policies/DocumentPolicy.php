@@ -5,6 +5,7 @@ namespace App\Policies;
 use App\Models\Document;
 use App\Models\User;
 use App\Services\Access\AccessService;
+use App\Support\DocumentWorkflow;
 
 class DocumentPolicy
 {
@@ -72,5 +73,47 @@ class DocumentPolicy
         return $actor->hasPermission('documents.share')
             || $actor->hasPermission('accesses.manage')
             || $this->accessService->userCan($actor, $document, 'share');
+    }
+
+    public function propose(User $actor, Document $document): bool
+    {
+        if (! DocumentWorkflow::canPropose($document)) {
+            return false;
+        }
+
+        return $actor->id === $document->author_id
+            || $actor->id === $document->owner_id
+            || $actor->hasPermission('documents.update');
+    }
+
+    public function startWorkflow(User $actor, Document $document): bool
+    {
+        if (! DocumentWorkflow::canStartValidation($document)) {
+            return false;
+        }
+
+        return $this->canManageProjectWorkflow($actor, $document);
+    }
+
+    public function resetWorkflow(User $actor, Document $document): bool
+    {
+        if (DocumentWorkflow::isPersonal($document)) {
+            return false;
+        }
+
+        return $this->canManageProjectWorkflow($actor, $document);
+    }
+
+    private function canManageProjectWorkflow(User $actor, Document $document): bool
+    {
+        if ($actor->hasPermission('workflows.manage')) {
+            return true;
+        }
+
+        if ($document->project_id) {
+            return $actor->managedProjects()->where('id', $document->project_id)->exists();
+        }
+
+        return false;
     }
 }

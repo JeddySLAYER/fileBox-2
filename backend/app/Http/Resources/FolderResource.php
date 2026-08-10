@@ -32,6 +32,13 @@ class FolderResource extends JsonResource
             'children' => FolderResource::collection($this->whenLoaded('children')),
             'children_count' => $this->whenCounted('children'),
             'documents_count' => $this->whenCounted('documents'),
+            'is_favorited' => (bool) ($this->is_favorited ?? false),
+            'is_project_root' => (bool) $this->is_project_root,
+            'tags' => $this->whenLoaded('tags', fn () => $this->tags->map(fn ($tag) => [
+                'id' => $tag->id,
+                'name' => $tag->name,
+                'slug' => $tag->slug,
+            ])->values()),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'deleted_at' => $this->deleted_at,

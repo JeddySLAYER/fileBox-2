@@ -42,12 +42,13 @@ test('un admin peut créer un utilisateur avec mot de passe temporaire', functio
     $response->assertCreated()
         ->assertJsonPath('user.email', 'alice@filebox.test')
         ->assertJsonPath('user.must_change_password', true)
-        ->assertJsonStructure(['temporary_password', 'user']);
+        ->assertJsonStructure(['user']);
 
     $created = User::query()->where('email', 'alice@filebox.test')->first();
 
     expect($created)->not->toBeNull()
         ->and($created->must_change_password)->toBeTrue()
+        ->and($created->temporary_password_expires_at)->not->toBeNull()
         ->and($created->roles->pluck('slug')->all())->toContain('collaborateur');
 
     Notification::assertSentTo($created, TemporaryPasswordNotification::class);
@@ -62,20 +63,52 @@ test('un admin peut consulter un utilisateur', function () {
         ->assertJsonPath('user.id', $target->id);
 });
 
-test('un admin peut mettre à jour un utilisateur', function () {
+test('désactiver un utilisateur révoque ses sessions', function () {
     Sanctum::actingAs(adminUser());
-    $target = User::factory()->create(['name' => 'Old Name']);
-    $roleId = Role::query()->where('slug', 'chef_projet')->value('id');
+
+    $target = User::factory()->create(['is_active' => true]);
+    $token = $target->createToken('pest')->plainTextToken;
+    expect($target->tokens()->count())->toBe(1);
 
     $this->putJson("/api/users/{$target->id}", [
-        'name' => 'New Name',
-        'role_ids' => [$roleId],
         'is_active' => false,
     ])->assertOk()
-        ->assertJsonPath('user.name', 'New Name')
         ->assertJsonPath('user.is_active', false);
 
-    expect($target->fresh()->roles->pluck('slug')->all())->toContain('chef_projet');
+    expect($target->fresh()->is_active)->toBeFalse()
+        ->and($target->fresh()->tokens()->count())->toBe(0);
+
+    $this->app['auth']->forgetGuards();
+
+    $this->withToken($token)
+        ->getJson('/api/auth/me')
+        ->assertUnauthorized();
+});
+
+test('un utilisateur désactivé ne peut plus utiliser l API même avec un ancien token', function () {
+    $user = User::factory()->create(['is_active' => true, 'must_change_password' => false]);
+    $token = $user->createToken('pest')->plainTextToken;
+
+    $user->update(['is_active' => false]);
+
+    $this->withToken($token)
+        ->getJson('/api/auth/me')
+        ->assertUnauthorized()
+        ->assertJsonPath('account_disabled', true);
+
+    expect($user->fresh()->tokens()->count())->toBe(0);
+});
+
+test('un admin ne peut pas désactiver son propre compte', function () {
+    $admin = adminUser();
+    Sanctum::actingAs($admin);
+
+    $this->putJson("/api/users/{$admin->id}", [
+        'is_active' => false,
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors(['is_active']);
+
+    expect($admin->fresh()->is_active)->toBeTrue();
 });
 
 test('un admin peut supprimer un utilisateur et réutiliser son email', function () {
@@ -127,7 +160,7 @@ test('un admin peut régénérer un mot de passe temporaire', function () {
     $this->postJson("/api/users/{$target->id}/reset-password")
         ->assertOk()
         ->assertJsonPath('user.must_change_password', true)
-        ->assertJsonStructure(['temporary_password']);
+        ->assertJsonPath('user.temporary_password_expires_at', fn ($value) => ! empty($value));
 
     expect($target->fresh()->tokens()->count())->toBe(0);
 

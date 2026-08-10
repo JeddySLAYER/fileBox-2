@@ -23,6 +23,7 @@ import TrashPage from '@/modules/trash/pages/TrashPage'
 import UsersPage from '@/modules/users/pages/UsersPage'
 import WorkflowDetailPage from '@/modules/workflows/pages/WorkflowDetailPage'
 import WorkflowsPage from '@/modules/workflows/pages/WorkflowsPage'
+import ProposedDocumentsPage from '@/modules/validations/pages/ProposedDocumentsPage'
 
 export default function AppRoutes() {
   return (
@@ -71,7 +72,7 @@ export default function AppRoutes() {
           <Route
             path="/projects"
             element={
-              <RequirePermissionRoute permission="projects.manage">
+              <RequirePermissionRoute anyOf={['projects.view', 'projects.manage']}>
                 <ProjectsPage />
               </RequirePermissionRoute>
             }
@@ -79,7 +80,7 @@ export default function AppRoutes() {
           <Route
             path="/projects/:id"
             element={
-              <RequirePermissionRoute permission="projects.manage">
+              <RequirePermissionRoute anyOf={['projects.view', 'projects.manage']}>
                 <ProjectDetailPage />
               </RequirePermissionRoute>
             }
@@ -97,6 +98,14 @@ export default function AppRoutes() {
             element={
               <RequirePermissionRoute permission="workflows.manage">
                 <WorkflowDetailPage />
+              </RequirePermissionRoute>
+            }
+          />
+          <Route
+            path="/proposed"
+            element={
+              <RequirePermissionRoute anyOf={['workflows.manage', 'projects.manage']}>
+                <ProposedDocumentsPage />
               </RequirePermissionRoute>
             }
           />

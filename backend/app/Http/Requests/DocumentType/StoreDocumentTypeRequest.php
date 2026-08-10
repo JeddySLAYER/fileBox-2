@@ -19,6 +19,7 @@ class StoreDocumentTypeRequest extends FormRequest
             'slug' => ['sometimes', 'string', 'max:255', 'unique:document_types,slug'],
             'description' => ['nullable', 'string'],
             'default_workflow_id' => ['nullable', 'integer', 'exists:workflows,id'],
+            'requires_workflow' => ['sometimes', 'boolean'],
         ];
     }
 }

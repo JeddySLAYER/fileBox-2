@@ -24,6 +24,7 @@ class ProjectController extends Controller
         $this->authorize('viewAny', Project::class);
 
         $projects = $this->projectService->list(
+            actor: $request->user(),
             filters: $request->only(['search', 'department_id', 'status']),
             perPage: (int) $request->integer('per_page', 15),
         );
@@ -35,7 +36,7 @@ class ProjectController extends Controller
     {
         $this->authorize('create', Project::class);
 
-        $project = $this->projectService->create($request->validated());
+        $project = $this->projectService->create($request->user(), $request->validated());
 
         return response()->json([
             'message' => 'Projet créé.',
@@ -47,7 +48,8 @@ class ProjectController extends Controller
     {
         $this->authorize('view', $project);
 
-        $project->load(['department', 'manager', 'members'])->loadCount('members');
+        $project->load(['department', 'departments', 'manager', 'members', 'rootFolder'])
+            ->loadCount('members');
 
         return response()->json([
             'project' => new ProjectResource($project),
@@ -86,6 +88,22 @@ class ProjectController extends Controller
         return response()->json([
             'message' => 'Membres du projet synchronisés.',
             'project' => new ProjectResource($project),
+        ]);
+    }
+
+    public function memberCandidates(Project $project): JsonResponse
+    {
+        $this->authorize('update', $project);
+
+        $users = $this->projectService->memberCandidates($project);
+
+        return response()->json([
+            'data' => $users->map(fn ($u) => [
+                'id' => $u->id,
+                'name' => $u->name,
+                'email' => $u->email,
+                'department_id' => $u->department_id,
+            ])->values(),
         ]);
     }
 }
