@@ -90,10 +90,12 @@ class WorkflowService
         $workflow->steps()->delete();
 
         foreach (array_values($steps) as $index => $step) {
+            $order = $step['step_order'] ?? ($index + 1);
+
             WorkflowStep::query()->create([
                 'workflow_id' => $workflow->id,
-                'name' => $step['name'],
-                'step_order' => $step['step_order'] ?? ($index + 1),
+                'name' => 'Validation '.$order,
+                'step_order' => $order,
                 'responsible_role_id' => $step['responsible_role_id'] ?? null,
                 'responsible_user_id' => $step['responsible_user_id'] ?? null,
                 'is_mandatory' => $step['is_mandatory'] ?? true,

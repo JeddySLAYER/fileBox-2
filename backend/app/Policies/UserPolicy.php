@@ -8,7 +8,10 @@ class UserPolicy
 {
     public function viewAny(User $actor): bool
     {
-        return $actor->hasPermission('users.view');
+        return $actor->hasPermission('users.view')
+            || $actor->hasPermission('workflows.manage')
+            || $actor->hasPermission('documents.share')
+            || $actor->hasPermission('accesses.manage');
     }
 
     public function view(User $actor, User $user): bool

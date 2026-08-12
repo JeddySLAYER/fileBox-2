@@ -66,18 +66,52 @@ function startWorkflow(Document $document, Workflow $workflow, bool $propose = f
 
 test('un admin peut créer un workflow avec étapes', function () {
     Sanctum::actingAs(adminUser());
-    $roleId = Role::query()->where('slug', 'direction')->value('id');
+    $userA = User::factory()->create(['is_active' => true, 'must_change_password' => false]);
+    $userB = User::factory()->create(['is_active' => true, 'must_change_password' => false]);
 
     $this->postJson('/api/workflows', [
         'name' => 'Validation contrat',
         'code' => 'WF-VALIDATION-CONTRAT',
         'steps' => [
-            ['name' => 'Relecture', 'step_order' => 1, 'responsible_role_id' => $roleId],
-            ['name' => 'Validation finale', 'step_order' => 2, 'responsible_role_id' => $roleId],
+            ['name' => 'Validation 1', 'step_order' => 1, 'responsible_user_id' => $userA->id],
+            ['name' => 'Validation 2', 'step_order' => 2, 'responsible_user_id' => $userB->id],
         ],
     ])->assertCreated()
         ->assertJsonPath('workflow.code', 'WF-VALIDATION-CONTRAT')
         ->assertJsonCount(2, 'workflow.steps');
+});
+
+test('un workflow peut assigner un utilisateur responsable par étape', function () {
+    Sanctum::actingAs(adminUser());
+    $validator = User::factory()->create(['is_active' => true, 'must_change_password' => false]);
+
+    $this->postJson('/api/workflows', [
+        'name' => 'Validation nominative',
+        'code' => 'WF-USER-STEP',
+        'steps' => [
+            [
+                'step_order' => 1,
+                'responsible_user_id' => $validator->id,
+            ],
+        ],
+    ])->assertCreated()
+        ->assertJsonPath('workflow.steps.0.responsible_user.id', $validator->id)
+        ->assertJsonPath('workflow.steps.0.name', 'Validation 1');
+});
+
+test('un utilisateur ne peut pas être assigné deux fois dans un workflow', function () {
+    Sanctum::actingAs(adminUser());
+    $validator = User::factory()->create(['is_active' => true, 'must_change_password' => false]);
+
+    $this->postJson('/api/workflows', [
+        'name' => 'Doublon',
+        'code' => 'WF-DUP-USER',
+        'steps' => [
+            ['responsible_user_id' => $validator->id],
+            ['responsible_user_id' => $validator->id],
+        ],
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors(['steps']);
 });
 
 test('démarrage d un workflow met le document en validation', function () {
