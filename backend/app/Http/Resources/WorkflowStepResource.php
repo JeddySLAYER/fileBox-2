@@ -16,6 +16,9 @@ class WorkflowStepResource extends JsonResource
             'name' => $this->name,
             'step_order' => $this->step_order,
             'is_mandatory' => $this->is_mandatory,
+            'duration_hours' => $this->duration_hours,
+            'reminder_hours_before' => $this->reminder_hours_before,
+            'remind_on_overdue' => (bool) $this->remind_on_overdue,
             'description' => $this->description,
             'responsible_role' => $this->whenLoaded('responsibleRole', fn () => $this->responsibleRole ? [
                 'id' => $this->responsibleRole->id,

@@ -4,6 +4,7 @@ namespace App\Http\Requests\DocumentType;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 class UpdateDocumentTypeRequest extends FormRequest
 {
@@ -24,5 +25,25 @@ class UpdateDocumentTypeRequest extends FormRequest
             'default_workflow_id' => ['nullable', 'integer', 'exists:workflows,id'],
             'requires_workflow' => ['sometimes', 'boolean'],
         ];
+    }
+
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            $type = $this->route('document_type');
+            $requires = $this->exists('requires_workflow')
+                ? $this->boolean('requires_workflow')
+                : (bool) $type?->requires_workflow;
+            $workflowId = array_key_exists('default_workflow_id', $this->all())
+                ? $this->input('default_workflow_id')
+                : $type?->default_workflow_id;
+
+            if ($requires && ! $workflowId) {
+                $validator->errors()->add(
+                    'default_workflow_id',
+                    'Choisissez un workflow par défaut : ce type exige un circuit de validation.',
+                );
+            }
+        });
     }
 }

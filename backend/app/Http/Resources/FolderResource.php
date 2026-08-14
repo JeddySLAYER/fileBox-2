@@ -19,6 +19,7 @@ class FolderResource extends JsonResource
                 'id' => $this->project->id,
                 'name' => $this->project->name,
                 'code' => $this->project->code,
+                'root_folder_id' => $this->project->root_folder_id,
             ] : null),
             'department' => $this->whenLoaded('department', fn () => $this->department ? [
                 'id' => $this->department->id,
@@ -33,6 +34,7 @@ class FolderResource extends JsonResource
             'children_count' => $this->whenCounted('children'),
             'documents_count' => $this->whenCounted('documents'),
             'is_favorited' => (bool) ($this->is_favorited ?? false),
+            'can_share' => $request->user()?->can('share', $this->resource) ?? false,
             'is_project_root' => (bool) $this->is_project_root,
             'tags' => $this->whenLoaded('tags', fn () => $this->tags->map(fn ($tag) => [
                 'id' => $tag->id,

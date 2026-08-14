@@ -18,7 +18,7 @@ use App\Events\Document\DocumentPublished;
 use App\Events\Document\DocumentRestored;
 use App\Events\Document\DocumentUnarchived;
 use App\Events\Document\DocumentVersionCreated;
-use App\Services\Access\AccessService;
+use App\Services\Access\SpaceVisibility;
 use App\Services\Storage\FileStorageService;
 use App\Support\DocumentEditability;
 use App\Support\DocumentWorkflow;
@@ -32,11 +32,11 @@ class DocumentService
 {
     public function __construct(
         private readonly FileStorageService $files,
-        private readonly AccessService $accessService,
+        private readonly SpaceVisibility $spaceVisibility,
     ) {}
 
     /**
-     * @param  array{search?: string, folder_id?: int, project_id?: int, status?: string, trashed?: bool}  $filters
+     * @param  array{search?: string, folder_id?: int, explorer_root?: bool, project_id?: int, status?: string, trashed?: bool, archived?: bool}  $filters
      */
     public function list(User $actor, array $filters = [], int $perPage = 15): LengthAwarePaginator
     {
@@ -49,6 +49,15 @@ class DocumentService
 
         if (! empty($filters['trashed'])) {
             $query->onlyTrashed();
+        } else {
+            $archivedOnly = filter_var($filters['archived'] ?? false, FILTER_VALIDATE_BOOLEAN)
+                || ($filters['status'] ?? '') === DocumentStatus::Archived->value;
+
+            if ($archivedOnly) {
+                $query->where('status', DocumentStatus::Archived);
+            } else {
+                $query->where('status', '!=', DocumentStatus::Archived);
+            }
         }
 
         if (! empty($filters['search'])) {
@@ -61,6 +70,8 @@ class DocumentService
 
         if (! empty($filters['folder_id'])) {
             $query->where('folder_id', $filters['folder_id']);
+        } elseif (! empty($filters['explorer_root'])) {
+            $this->spaceVisibility->restrictToExplorerRootDocuments($query, $actor);
         }
 
         if (! empty($filters['project_id'])) {
@@ -71,10 +82,7 @@ class DocumentService
             $query->where('status', $filters['status']);
         }
 
-        if (! $actor->hasPermission('documents.view')) {
-            $ids = $this->accessService->accessibleDocumentIds($actor);
-            $query->whereIn('id', $ids ?: [0]);
-        }
+        $this->spaceVisibility->applyDocumentScope($query, $actor);
 
         return $query->paginate($perPage);
     }
@@ -88,6 +96,8 @@ class DocumentService
     {
         return DB::transaction(function () use ($actor, $data, $file) {
             $data = $this->enrichFromFolder($data);
+            $folder = Folder::query()->findOrFail($data['folder_id']);
+            abort_unless($this->spaceVisibility->canViewFolder($actor, $folder), 403);
             $documentType = ! empty($data['document_type_id'])
                 ? DocumentType::query()->find($data['document_type_id'])
                 : null;
@@ -131,6 +141,144 @@ class DocumentService
             $loaded = $this->loadDocument($document);
 
             event(new DocumentCreated($loaded, $actor));
+
+            return $loaded;
+        });
+    }
+
+    /**
+     * Crée un document à partir d’un contenu texte (ex. résultat OCR).
+     *
+     * @param  array{title: string, folder_id: int, description?: string|null, project_id?: int|null, department_id?: int|null}  $data
+     */
+    public function createFromContent(
+        User $actor,
+        array $data,
+        string $content,
+        string $fileName = 'document.txt',
+    ): Document {
+        return DB::transaction(function () use ($actor, $data, $content, $fileName) {
+            $data = $this->enrichFromFolder($data);
+            $safeName = pathinfo($fileName, PATHINFO_EXTENSION)
+                ? $fileName
+                : $fileName.'.txt';
+
+            $document = Document::query()->create([
+                'reference' => $this->nextReference(),
+                'title' => $data['title'],
+                'description' => $data['description'] ?? null,
+                'folder_id' => $data['folder_id'],
+                'project_id' => $data['project_id'] ?? null,
+                'department_id' => $data['department_id'] ?? null,
+                'author_id' => $actor->id,
+                'owner_id' => $data['owner_id'] ?? $actor->id,
+                'status' => DocumentStatus::Draft,
+                'confidentiality' => $data['confidentiality'] ?? ConfidentialityLevel::PublicInternal->value,
+                'is_editable' => DocumentEditability::fromFileName($safeName),
+            ]);
+
+            $stored = $this->files->storeDocumentContent(
+                content: $content,
+                documentId: $document->id,
+                versionNumber: 1,
+                fileName: $safeName,
+                mimeType: 'text/plain',
+            );
+
+            $version = Version::query()->create([
+                'document_id' => $document->id,
+                'version_number' => 1,
+                'file_path' => $stored['file_path'],
+                'file_name' => $stored['file_name'],
+                'mime_type' => $stored['mime_type'],
+                'extension' => $stored['extension'],
+                'size' => $stored['size'],
+                'checksum' => $stored['checksum'],
+                'created_by' => $actor->id,
+                'change_summary' => 'Version initiale (texte OCR)',
+                'is_locked' => false,
+            ]);
+
+            $document->current_version_id = $version->id;
+            $document->save();
+
+            $loaded = $this->loadDocument($document);
+            event(new DocumentCreated($loaded, $actor));
+
+            return $loaded;
+        });
+    }
+
+    public function saveOcrAsVersion(Document $source, User $actor, string $text): Document
+    {
+        $source->loadMissing('currentVersion');
+        $text = trim($text);
+
+        if ($text === '') {
+            throw ValidationException::withMessages([
+                'ocr' => ['Aucun texte OCR à enregistrer.'],
+            ]);
+        }
+
+        $base = pathinfo((string) $source->currentVersion?->file_name, PATHINFO_FILENAME) ?: 'document';
+
+        return $this->createVersionFromContent(
+            document: $source,
+            actor: $actor,
+            content: $text,
+            fileName: $base.'-ocr.txt',
+            mimeType: 'text/plain',
+            changeSummary: 'Texte extrait par OCR (IA)',
+        );
+    }
+
+    /**
+     * Nouvelle version à partir d’un contenu (OCR, etc.) — y compris si le fichier courant n’est pas éditable.
+     */
+    public function createVersionFromContent(
+        Document $document,
+        User $actor,
+        string $content,
+        string $fileName,
+        string $mimeType = 'text/plain',
+        ?string $changeSummary = null,
+        ?string $ocrText = null,
+    ): Document {
+        $this->assertModifiable($document);
+
+        return DB::transaction(function () use ($document, $actor, $content, $fileName, $mimeType, $changeSummary, $ocrText) {
+            $this->lockCurrentVersion($document);
+
+            $nextNumber = (int) $document->versions()->max('version_number') + 1;
+            $stored = $this->files->storeDocumentContent(
+                content: $content,
+                documentId: $document->id,
+                versionNumber: $nextNumber,
+                fileName: $fileName,
+                mimeType: $mimeType,
+            );
+
+            $version = Version::query()->create([
+                'document_id' => $document->id,
+                'version_number' => $nextNumber,
+                'file_path' => $stored['file_path'],
+                'file_name' => $stored['file_name'],
+                'mime_type' => $stored['mime_type'],
+                'extension' => $stored['extension'],
+                'size' => $stored['size'],
+                'checksum' => $stored['checksum'],
+                'created_by' => $actor->id,
+                'change_summary' => $changeSummary ?? "Version {$nextNumber}",
+                'is_locked' => false,
+                'ocr_text' => $ocrText,
+            ]);
+
+            $document->current_version_id = $version->id;
+            $document->is_editable = DocumentEditability::fromExtension($version->extension);
+            $document->save();
+
+            $loaded = $this->loadDocument($document, withVersions: true);
+            event(new DocumentVersionCreated($loaded, $actor, $nextNumber));
 
             return $loaded;
         });
@@ -398,7 +546,12 @@ class DocumentService
     {
         $this->assertModifiable($document);
 
+        $folder = Folder::query()->findOrFail($folderId);
+        abort_unless($this->spaceVisibility->canViewFolder(request()->user(), $folder), 403);
+
         $document->folder_id = $folderId;
+        $document->project_id = $folder->project_id;
+        $document->department_id = $folder->department_id;
         $document->save();
 
         return $document->load(['folder', 'author', 'owner', 'currentVersion']);

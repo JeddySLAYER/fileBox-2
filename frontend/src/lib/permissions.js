@@ -20,3 +20,8 @@ export function canAny(user, permissions) {
 export function hasRole(user, slug) {
   return Boolean(user?.roles?.some((r) => r.slug === slug))
 }
+
+/** Admin / direction : voient tous les espaces. Les autres sont bornés à leur appartenance. */
+export function seesAllSpaces(user) {
+  return hasRole(user, 'administrateur') || hasRole(user, 'direction')
+}

@@ -2,11 +2,16 @@
 
 namespace App\Services\Workflow;
 
+use App\Enums\DocumentStatus;
+use App\Models\Document;
+use App\Models\DocumentType;
 use App\Models\User;
 use App\Models\Workflow;
 use App\Models\WorkflowStep;
+use App\Support\DurationHours;
 use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -20,7 +25,7 @@ class WorkflowService
     {
         $query = Workflow::query()
             ->with(['steps.responsibleRole', 'steps.responsibleUser', 'creator'])
-            ->withCount(['steps', 'documents'])
+            ->withCount($this->usageCounts())
             ->orderBy('name');
 
         if (! empty($filters['search'])) {
@@ -65,6 +70,8 @@ class WorkflowService
      */
     public function update(Workflow $workflow, array $data): Workflow
     {
+        $this->assertNotInUse($workflow, 'modifier');
+
         return DB::transaction(function () use ($workflow, $data) {
             $workflow->fill(collect($data)->only([
                 'name',
@@ -83,7 +90,7 @@ class WorkflowService
     }
 
     /**
-     * @param  array<int, array{name: string, step_order?: int, responsible_role_id?: int|null, responsible_user_id?: int|null, is_mandatory?: bool, description?: string|null}>  $steps
+     * @param  array<int, array{name: string, step_order?: int, responsible_role_id?: int|null, responsible_user_id?: int|null, is_mandatory?: bool, description?: string|null, duration_hours?: int|null, duration_amount?: int|null, duration_unit?: string|null, reminder_hours_before?: int|null, reminder_amount?: int|null, reminder_unit?: string|null, remind_on_overdue?: bool}>  $steps
      */
     public function syncSteps(Workflow $workflow, array $steps): Workflow
     {
@@ -91,6 +98,17 @@ class WorkflowService
 
         foreach (array_values($steps) as $index => $step) {
             $order = $step['step_order'] ?? ($index + 1);
+            $durationHours = DurationHours::toHours($step['duration_amount'] ?? null, $step['duration_unit'] ?? 'hours')
+                ?? (isset($step['duration_hours']) ? (int) $step['duration_hours'] : null);
+            $reminderHours = DurationHours::toHours($step['reminder_amount'] ?? null, $step['reminder_unit'] ?? 'hours')
+                ?? (isset($step['reminder_hours_before']) ? (int) $step['reminder_hours_before'] : null);
+
+            if ($durationHours !== null && $durationHours < 1) {
+                $durationHours = null;
+            }
+            if ($reminderHours !== null && ($durationHours === null || $reminderHours >= $durationHours)) {
+                $reminderHours = null;
+            }
 
             WorkflowStep::query()->create([
                 'workflow_id' => $workflow->id,
@@ -99,6 +117,9 @@ class WorkflowService
                 'responsible_role_id' => $step['responsible_role_id'] ?? null,
                 'responsible_user_id' => $step['responsible_user_id'] ?? null,
                 'is_mandatory' => $step['is_mandatory'] ?? true,
+                'duration_hours' => $durationHours,
+                'reminder_hours_before' => $reminderHours,
+                'remind_on_overdue' => true,
                 'description' => $step['description'] ?? null,
             ]);
         }
@@ -108,13 +129,13 @@ class WorkflowService
 
     public function delete(Workflow $workflow): void
     {
-        if ($workflow->documents()->whereIn('status', ['en_validation'])->exists()) {
-            throw ValidationException::withMessages([
-                'workflow' => ['Impossible de supprimer un workflow utilisé par des documents en cours de validation.'],
-            ]);
-        }
+        $this->assertNotInUse($workflow, 'supprimer');
 
-        SoftDeleteArchive::archive($workflow, ['code']);
+        DB::transaction(function () use ($workflow) {
+            Document::query()->where('workflow_id', $workflow->id)->update(['workflow_id' => null]);
+            DocumentType::query()->where('default_workflow_id', $workflow->id)->update(['default_workflow_id' => null]);
+            SoftDeleteArchive::archive($workflow, ['code']);
+        });
     }
 
     private function loadWorkflow(Workflow $workflow): Workflow
@@ -123,7 +144,26 @@ class WorkflowService
             'steps.responsibleRole',
             'steps.responsibleUser',
             'creator',
-        ])->loadCount(['steps', 'documents']);
+        ])->loadCount($this->usageCounts());
+    }
+
+    /** @return array<int|string, mixed> */
+    public function usageCounts(): array
+    {
+        return [
+            'steps',
+            'documents',
+            'documents as in_validation_count' => fn (Builder $q) => $q->where('status', DocumentStatus::InValidation),
+        ];
+    }
+
+    private function assertNotInUse(Workflow $workflow, string $action): void
+    {
+        if ($workflow->documents()->where('status', DocumentStatus::InValidation)->exists()) {
+            throw ValidationException::withMessages([
+                'workflow' => ["Impossible de {$action} un workflow utilisé par des documents en cours de validation."],
+            ]);
+        }
     }
 
     private function generateCode(string $name): string

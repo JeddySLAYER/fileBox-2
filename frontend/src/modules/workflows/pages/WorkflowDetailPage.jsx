@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Plus, Save, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
 import Card from '@/components/ui/Card'
@@ -13,16 +14,24 @@ import LoadingScreen from '@/components/ui/LoadingScreen'
 import PageHeader from '@/components/ui/PageHeader'
 import { getErrorMessage } from '@/lib/api'
 import { unwrapPaginated } from '@/lib/apiHelpers'
+import {
+  emptyStepTiming,
+  stepTimingFromApi,
+  timingPayload,
+  validateStepTiming,
+} from '@/lib/duration'
 import { can } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { usersApi } from '@/modules/users/api'
 import { workflowsApi } from '@/modules/workflows/api'
+import WorkflowStepTimingFields from '@/modules/workflows/components/WorkflowStepTimingFields'
 import { useAuthStore } from '@/stores/authStore'
 
 function emptyStep() {
   return {
     responsible_user_id: '',
     is_mandatory: true,
+    ...emptyStepTiming(),
   }
 }
 
@@ -37,6 +46,7 @@ function buildFormFromWorkflow(workflow) {
         ? workflow.steps.map((s) => ({
             responsible_user_id: s.responsible_user?.id ?? '',
             is_mandatory: s.is_mandatory ?? true,
+            ...stepTimingFromApi(s),
           }))
         : [emptyStep()],
   }
@@ -44,9 +54,11 @@ function buildFormFromWorkflow(workflow) {
 
 export default function WorkflowDetailPage() {
   const { id } = useParams()
+  const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
-  const canEdit = can(user, 'workflows.manage')
+  const confirm = useConfirm()
+  const canManage = can(user, 'workflows.manage')
   const [formDraft, setFormDraft] = useState(null)
 
   const { data: workflow, isLoading, isError } = useQuery({
@@ -58,7 +70,7 @@ export default function WorkflowDetailPage() {
   const usersQuery = useQuery({
     queryKey: queryKeys.users({ per_page: 200, is_active: '1' }),
     queryFn: () => usersApi.list({ per_page: 200, is_active: 1 }),
-    enabled: canEdit,
+    enabled: canManage,
   })
 
   const save = useMutation({
@@ -71,6 +83,10 @@ export default function WorkflowDetailPage() {
       if (new Set(ids).size !== ids.length) {
         throw new Error('Un utilisateur ne peut être choisi qu’une fois dans le workflow.')
       }
+      const timingError = form.steps.map(validateStepTiming).find(Boolean)
+      if (timingError) {
+        throw new Error(timingError)
+      }
       return workflowsApi.update(id, {
         name: form.name,
         code: form.code || undefined,
@@ -82,6 +98,7 @@ export default function WorkflowDetailPage() {
           responsible_user_id: Number(s.responsible_user_id),
           responsible_role_id: null,
           is_mandatory: Boolean(s.is_mandatory),
+          ...timingPayload(s),
         })),
       })
     },
@@ -94,11 +111,23 @@ export default function WorkflowDetailPage() {
     onError: (e) => toast.error(getErrorMessage(e, e.message)),
   })
 
+  const removeWorkflow = useMutation({
+    mutationFn: () => workflowsApi.remove(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+      navigate('/workflows')
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
   const users = unwrapPaginated(usersQuery.data).data
 
   if (isLoading) return <LoadingScreen />
   if (isError || !workflow) return <EmptyState title="Workflow introuvable" />
 
+  const inUse = Boolean(workflow.in_use)
+  const canEdit = canManage && !inUse
   const form = formDraft ?? buildFormFromWorkflow(workflow)
   const setForm = (next) => setFormDraft(typeof next === 'function' ? next(form) : next)
 
@@ -124,6 +153,25 @@ export default function WorkflowDetailPage() {
               <ArrowLeft className="h-4 w-4" />
               Retour
             </Button>
+            {canManage && !inUse ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={removeWorkflow.isPending}
+                onClick={async () => {
+                  const ok = await confirm({
+                    title: 'Supprimer le workflow',
+                    description:
+                      'Les documents et types qui l’utilisent n’y seront plus liés. Les circuits en cours de validation empêchent la suppression.',
+                    confirmLabel: 'Supprimer',
+                  })
+                  if (ok) removeWorkflow.mutate()
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+                Supprimer
+              </Button>
+            ) : null}
             {canEdit ? (
               <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
                 <Save className="h-4 w-4" />
@@ -133,6 +181,13 @@ export default function WorkflowDetailPage() {
           </>
         }
       />
+
+      {inUse ? (
+        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          Ce workflow est utilisé par {workflow.in_validation_count ?? 1} document(s) en cours de
+          validation. Modification et suppression sont bloquées jusqu’à la fin du circuit.
+        </p>
+      ) : null}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
         <Card>
@@ -189,7 +244,8 @@ export default function WorkflowDetailPage() {
             ) : null}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Un utilisateur ne peut apparaître qu’une seule fois dans le circuit.
+            Un utilisateur ne peut apparaître qu’une seule fois. Définissez la durée de chaque
+            étape et le moment du rappel.
           </p>
 
           <ul className="mt-4 space-y-3">
@@ -234,6 +290,11 @@ export default function WorkflowDetailPage() {
                       ))}
                     </select>
                   </div>
+                  <WorkflowStepTimingFields
+                    step={step}
+                    disabled={!canEdit}
+                    onChange={(patch) => updateStep(index, patch)}
+                  />
                 </li>
               )
             })}

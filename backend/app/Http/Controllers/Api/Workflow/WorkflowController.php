@@ -47,7 +47,7 @@ class WorkflowController extends Controller
         $this->authorize('view', $workflow);
 
         $workflow->load(['steps.responsibleRole', 'steps.responsibleUser', 'creator'])
-            ->loadCount(['steps', 'documents']);
+            ->loadCount($this->workflowService->usageCounts());
 
         return response()->json([
             'workflow' => new WorkflowResource($workflow),

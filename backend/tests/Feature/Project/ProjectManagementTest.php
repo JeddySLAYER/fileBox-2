@@ -61,6 +61,72 @@ test('le dossier racine projet n apparaît pas dans la liste racine explorateur'
         ->and($names)->not->toContain('Secret');
 });
 
+test('l espace projet est consultable et accepte des ressources', function () {
+    Sanctum::actingAs(adminUser());
+    $dept = Department::query()->create(['name' => 'DSI', 'code' => 'DSI']);
+
+    $created = $this->postJson('/api/projects', [
+        'name' => 'Espace',
+        'code' => 'PRJ-SPACE',
+        'department_ids' => [$dept->id],
+    ])->assertCreated()->json('project');
+
+    $rootId = $created['root_folder_id'];
+    expect($rootId)->not->toBeNull();
+
+    $this->getJson("/api/folders/{$rootId}")
+        ->assertOk()
+        ->assertJsonPath('folder.is_project_root', true)
+        ->assertJsonPath('folder.project.id', $created['id']);
+
+    $this->postJson('/api/folders', [
+        'name' => 'Livrables',
+        'parent_id' => $rootId,
+    ])->assertCreated()
+        ->assertJsonPath('folder.parent_id', $rootId)
+        ->assertJsonPath('folder.project.id', $created['id']);
+
+    $children = collect($this->getJson("/api/folders?parent_id={$rootId}")->assertOk()->json('data'))
+        ->pluck('name')
+        ->all();
+    expect($children)->toContain('Livrables');
+
+    $projectRoots = collect($this->getJson('/api/folders?project_roots=1')->assertOk()->json('data'))
+        ->pluck('name')
+        ->all();
+    expect($projectRoots)->toContain('Espace')
+        ->and(collect($this->getJson('/api/folders')->json('data'))->pluck('name')->all())->not->toContain('Espace');
+
+    $treeNames = collect($this->getJson("/api/folders/tree?project_id={$created['id']}")->assertOk()->json('data'))
+        ->pluck('name')
+        ->all();
+    expect($treeNames)->toContain('Espace');
+});
+
+test('la liste rattache le dossier projet existant comme espace', function () {
+    $admin = adminUser();
+    Sanctum::actingAs($admin);
+
+    $project = Project::query()->create([
+        'name' => 'Orphelin',
+        'code' => 'PRJ-ORPH',
+        'status' => 'actif',
+        'created_by' => $admin->id,
+    ]);
+    $folder = Folder::query()->create([
+        'name' => 'FileBox GED',
+        'project_id' => $project->id,
+        'created_by' => $admin->id,
+        'is_project_root' => false,
+    ]);
+
+    $row = collect($this->getJson('/api/projects')->assertOk()->json('data'))
+        ->firstWhere('code', 'PRJ-ORPH');
+
+    expect($row['root_folder_id'])->toBe($folder->id)
+        ->and($folder->fresh()->is_project_root)->toBeTrue();
+});
+
 test('un admin peut mettre à jour un projet', function () {
     Sanctum::actingAs(adminUser());
 
@@ -309,11 +375,11 @@ test('le role invite ne peut pas etre combine', function () {
         ->assertJsonPath('user.roles.0.slug', 'invite');
 });
 
-test('un invite ne peut pas avoir de departement', function () {
+test('admin chef direction et invite ne peuvent pas avoir de departement', function (string $slug) {
     Sanctum::actingAs(adminUser());
 
-    $inviteId = Role::query()->where('slug', 'invite')->value('id');
-    $dept = Department::query()->create(['name' => 'Ext', 'code' => 'EXT']);
+    $roleId = Role::query()->where('slug', $slug)->value('id');
+    $dept = Department::query()->create(['name' => 'Ext', 'code' => 'EXT-'.$slug]);
     $user = User::factory()->create([
         'department_id' => $dept->id,
         'must_change_password' => false,
@@ -321,17 +387,17 @@ test('un invite ne peut pas avoir de departement', function () {
     ]);
 
     $this->putJson("/api/users/{$user->id}", [
-        'role_ids' => [$inviteId],
+        'role_ids' => [$roleId],
         'department_id' => $dept->id,
     ])->assertStatus(422)
         ->assertJsonValidationErrors(['department_id']);
 
     $this->putJson("/api/users/{$user->id}", [
-        'role_ids' => [$inviteId],
+        'role_ids' => [$roleId],
         'department_id' => null,
     ])->assertOk()
         ->assertJsonPath('user.department_id', null);
-});
+})->with(['invite', 'administrateur', 'direction', 'chef_projet']);
 
 test('attribuer le role responsable demande confirmation si un autre existe', function () {
     Sanctum::actingAs(adminUser());

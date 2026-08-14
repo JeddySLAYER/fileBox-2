@@ -9,13 +9,19 @@ use App\Models\Document;
 use App\Models\User;
 use App\Models\Validation;
 use App\Models\Workflow;
+use App\Services\Access\SpaceVisibility;
 use App\Support\DocumentWorkflow;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 class ValidationService
 {
+    public function __construct(
+        private readonly SpaceVisibility $spaceVisibility,
+    ) {}
+
     /**
      * Associe un workflow au document et crée les validations (une par étape).
      *
@@ -35,7 +41,11 @@ class ValidationService
 
         if (! DocumentWorkflow::canStartValidation($document)) {
             throw ValidationException::withMessages([
-                'document' => ['Ce document ne peut pas démarrer un workflow dans son état actuel.'],
+                'document' => [
+                    DocumentWorkflow::requiresWorkflow($document)
+                        ? 'Ce document ne peut pas démarrer un workflow dans son état actuel.'
+                        : 'Le document doit d’abord être proposé à validation. Seuls les types qui exigent un circuit peuvent démarrer sans proposition.',
+                ],
             ]);
         }
 
@@ -78,13 +88,26 @@ class ValidationService
             $ordered = $workflow->steps->sortBy('step_order')->values();
 
             foreach ($ordered as $index => $step) {
-                $slaHours = $slaByStep[$step->id] ?? null;
+                $slaHours = $slaByStep[$step->id] ?? $step->duration_hours;
+                if ($slaHours !== null) {
+                    $slaHours = (int) $slaHours;
+                    if ($slaHours < 1) {
+                        $slaHours = null;
+                    }
+                }
+
+                $reminderHours = $step->reminder_hours_before;
+                if ($reminderHours !== null && ($slaHours === null || $reminderHours >= $slaHours)) {
+                    $reminderHours = null;
+                }
+
                 $validation = Validation::query()->create([
                     'document_id' => $document->id,
                     'workflow_step_id' => $step->id,
                     'status' => ValidationStatus::Pending,
                     'sla_hours' => $slaHours,
-                    // Délai actif uniquement sur la première étape ; les suivantes au passage
+                    'reminder_hours_before' => $reminderHours,
+                    'remind_on_overdue' => true,
                     'due_at' => $index === 0 && $slaHours !== null
                         ? now()->addHours($slaHours)
                         : null,
@@ -101,6 +124,7 @@ class ValidationService
                     document: $loaded,
                     validation: $firstValidation,
                     notificationAction: 'started',
+                    actor: auth()->user(),
                     description: "Workflow démarré sur {$loaded->reference}",
                     properties: ['workflow_id' => $workflow->id],
                 ));
@@ -157,6 +181,59 @@ class ValidationService
             ->get()
             ->sortBy(fn (Validation $v) => $v->workflowStep?->step_order ?? 0)
             ->values();
+    }
+
+    /**
+     * Étapes courantes à traiter : assigné nommément, ou superviseur dans ses espaces.
+     */
+    public function inbox(User $user): Collection
+    {
+        $query = Validation::query()
+            ->where('status', ValidationStatus::Pending)
+            ->whereHas('document', fn (Builder $q) => $q->where('status', DocumentStatus::InValidation))
+            ->currentStep()
+            ->with([
+                'document.author',
+                'document.folder',
+                'document.project',
+                'workflowStep.responsibleRole',
+                'workflowStep.responsibleUser',
+                'user',
+            ]);
+
+        $isSupervisor = $user->hasPermission('validations.act')
+            || $user->hasPermission('workflows.manage');
+
+        if ($isSupervisor) {
+            $query->where(function (Builder $q) use ($user) {
+                $q->whereHas('document', function (Builder $doc) use ($user) {
+                    $this->spaceVisibility->applyDocumentScope($doc, $user);
+                })->orWhere(function (Builder $assigned) use ($user) {
+                    $this->restrictToAssignee($assigned, $user);
+                });
+            });
+        } else {
+            $this->restrictToAssignee($query, $user);
+        }
+
+        return $query
+            ->orderByRaw('case when due_at is null then 1 else 0 end')
+            ->orderBy('due_at')
+            ->get();
+    }
+
+    private function restrictToAssignee(Builder $query, User $user): void
+    {
+        $roleIds = $user->roles()->pluck('roles.id');
+
+        $query->whereHas('workflowStep', function (Builder $q) use ($user, $roleIds) {
+            $q->where(function (Builder $inner) use ($user, $roleIds) {
+                $inner->where('responsible_user_id', $user->id);
+                if ($roleIds->isNotEmpty()) {
+                    $inner->orWhereIn('responsible_role_id', $roleIds);
+                }
+            });
+        });
     }
 
     public function approve(Validation $validation, User $actor, ?string $comment = null): Document

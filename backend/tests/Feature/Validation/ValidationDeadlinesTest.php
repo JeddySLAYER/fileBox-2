@@ -63,6 +63,8 @@ test('démarrage workflow avec délais par étape', function () {
     $s1 = $workflow->steps()->create(['name' => 'S1', 'step_order' => 1, 'is_mandatory' => true]);
     $s2 = $workflow->steps()->create(['name' => 'S2', 'step_order' => 2, 'is_mandatory' => true]);
 
+    $this->postJson("/api/documents/{$docId}/propose")->assertOk();
+
     $this->postJson("/api/documents/{$docId}/workflow/start", [
         'workflow_id' => $workflow->id,
         'deadlines' => [

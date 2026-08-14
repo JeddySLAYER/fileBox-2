@@ -148,6 +148,7 @@ class RolePermissionSeeder extends Seeder
                     'documents.create',
                     'documents.update',
                     'documents.delete',
+                    'documents.share',
                     'documents.download',
                     'comments.create',
                     'tags.manage',

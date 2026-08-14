@@ -20,9 +20,6 @@ export default function LoginPage() {
               Entrez vos identifiants pour accéder à la GED
             </p>
             <LoginForm />
-            <p className="mt-8 text-xs text-muted-foreground">
-              Les comptes sont créés par l&apos;administrateur — pas d&apos;inscription publique.
-            </p>
           </div>
         </div>
 
@@ -32,15 +29,11 @@ export default function LoginPage() {
       <div className="relative hidden overflow-hidden bg-foreground lg:block">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,#d73a31_0%,transparent_45%),radial-gradient(circle_at_80%_70%,#c52020_0%,transparent_40%)] opacity-80" />
         <div className="relative flex h-full flex-col justify-end p-12 text-white">
-          <p className="text-sm uppercase tracking-[0.2em] text-white/60">GED d&apos;entreprise</p>
+          <p className="text-sm uppercase tracking-[0.2em] text-white/60">FileBox</p>
           <h2 className="mt-3 max-w-md text-3xl font-semibold leading-tight">
-            Documents, versions, droits et validations — au même endroit.
+            Documents, versions, droits et validations au même endroit.
           </h2>
-          <p className="mt-4 max-w-md text-sm text-white/70">
-            Contrôle d&apos;accès par rôle, workflows de validation et traçabilité des actions —
-            pour une GED conforme aux exigences métier.
-          </p>
-        </div>
+          </div>
       </div>
     </div>
   )

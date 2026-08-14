@@ -70,6 +70,8 @@ test('rejet exige un commentaire', function () {
     ]);
     $workflow->steps()->create(['name' => 'S1', 'step_order' => 1, 'is_mandatory' => true]);
 
+    $this->postJson("/api/documents/{$docId}/propose")->assertOk();
+
     $this->postJson("/api/documents/{$docId}/workflow/start", [
         'workflow_id' => $workflow->id,
     ])->assertOk();
@@ -129,4 +131,46 @@ test('dashboard overview liste validations et bloquees', function () {
                 'favorites',
             ],
         ]);
+});
+
+test('dashboard ne compte que l etape courante d un workflow', function () {
+    $admin = adminUser();
+    Sanctum::actingAs($admin);
+
+    $project = Project::query()->create([
+        'code' => 'PRJ-DSH-WF',
+        'name' => 'Dashboard WF',
+        'manager_id' => $admin->id,
+        'status' => 'active',
+    ]);
+    $folder = Folder::query()->create([
+        'name' => 'D',
+        'project_id' => $project->id,
+        'created_by' => $admin->id,
+    ]);
+
+    $docId = $this->post('/api/documents', [
+        'title' => 'Circuit 2 étapes',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('d.pdf', 5, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->json('document.id');
+
+    $workflow = Workflow::query()->create([
+        'code' => 'WF-DSH-CUR',
+        'name' => 'Dashboard current',
+        'created_by' => $admin->id,
+        'is_active' => true,
+    ]);
+    $workflow->steps()->create(['name' => 'S1', 'step_order' => 1, 'is_mandatory' => true]);
+    $workflow->steps()->create(['name' => 'S2', 'step_order' => 2, 'is_mandatory' => true]);
+
+    $this->postJson("/api/documents/{$docId}/propose")->assertOk();
+    $this->postJson("/api/documents/{$docId}/workflow/start", [
+        'workflow_id' => $workflow->id,
+    ])->assertOk();
+
+    $this->getJson('/api/dashboard')
+        ->assertOk()
+        ->assertJsonPath('dashboard.counts.validations_pending', 1)
+        ->assertJsonCount(1, 'dashboard.pending_validations');
 });

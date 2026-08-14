@@ -1,6 +1,7 @@
 import api from '@/lib/api'
 
 export const validationsApi = {
+  inbox: () => api.get('/validations/inbox').then((r) => r.data),
   listForDocument: (documentId) =>
     api.get(`/documents/${documentId}/validations`).then((r) => r.data),
   start: (documentId, workflowId, deadlines = []) =>

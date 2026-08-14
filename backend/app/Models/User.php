@@ -26,6 +26,14 @@ use Laravel\Sanctum\HasApiTokens;
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
+    /** Rôles transverses : pas de rattachement à un département. */
+    public const ROLES_WITHOUT_DEPARTMENT = [
+        'invite',
+        'administrateur',
+        'direction',
+        'chef_projet',
+    ];
+
     /** @use HasFactory<UserFactory> */
     use HasApiTokens, HasFactory, Notifiable, SoftDeletes;
 

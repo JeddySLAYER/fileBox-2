@@ -78,7 +78,7 @@ class UserService
                 $user->roles()->sync($data['role_ids']);
             }
 
-            $this->enforceInviteDepartmentRule($user, $data);
+            $this->enforceNoDepartmentRoles($user, $data);
             $this->syncResponsableAssignment($user->fresh(), $data);
 
             return $user->load(['roles.permissions', 'department']);
@@ -132,7 +132,7 @@ class UserService
                 $user->roles()->sync($data['role_ids']);
             }
 
-            $this->enforceInviteDepartmentRule($user, $data);
+            $this->enforceNoDepartmentRoles($user, $data);
             $this->syncResponsableAssignment($user->fresh(), $data);
 
             // Fin de session immédiate si le compte vient d'être désactivé
@@ -145,14 +145,19 @@ class UserService
     }
 
     /**
-     * Un invité ne peut pas être rattaché à un département.
+     * Admin, direction, chef de projet et invité : aucun département.
      *
      * @param  array{department_id?: int|null, role_ids?: array<int>}  $data
      */
-    private function enforceInviteDepartmentRule(User $user, array $data): void
+    private function enforceNoDepartmentRoles(User $user, array $data): void
     {
-        $inviteId = Role::query()->where('slug', 'invite')->value('id');
-        if (! $inviteId) {
+        $blockedIds = Role::query()
+            ->whereIn('slug', User::ROLES_WITHOUT_DEPARTMENT)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if ($blockedIds === []) {
             return;
         }
 
@@ -160,15 +165,17 @@ class UserService
             ? array_map('intval', $data['role_ids'] ?? [])
             : $user->roles()->pluck('roles.id')->map(fn ($id) => (int) $id)->all();
 
-        if (! in_array((int) $inviteId, $roleIds, true)) {
+        $matched = array_values(array_intersect($blockedIds, $roleIds));
+        if ($matched === []) {
             return;
         }
 
         if (array_key_exists('department_id', $data)
             && $data['department_id'] !== null
             && $data['department_id'] !== '') {
+            $slug = Role::query()->whereIn('id', $matched)->value('slug');
             throw ValidationException::withMessages([
-                'department_id' => ['Un invité ne peut pas être rattaché à un département.'],
+                'department_id' => [$this->noDepartmentMessage($slug)],
             ]);
         }
 
@@ -176,6 +183,17 @@ class UserService
             $user->department_id = null;
             $user->save();
         }
+    }
+
+    private function noDepartmentMessage(?string $slug): string
+    {
+        return match ($slug) {
+            'invite' => 'Un invité ne peut pas être rattaché à un département.',
+            'administrateur' => 'Un administrateur ne peut pas être rattaché à un département.',
+            'direction' => 'Un compte direction ne peut pas être rattaché à un département.',
+            'chef_projet' => 'Un chef de projet ne peut pas être rattaché à un département.',
+            default => 'Ce profil ne peut pas être rattaché à un département.',
+        };
     }
 
     /**

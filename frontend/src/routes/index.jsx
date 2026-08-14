@@ -11,12 +11,14 @@ import DashboardPage from '@/modules/dashboard/pages/DashboardPage'
 import DepartmentsPage from '@/modules/departments/pages/DepartmentsPage'
 import DocumentTypesPage from '@/modules/document-types/pages/DocumentTypesPage'
 import DocumentDetailPage from '@/modules/documents/pages/DocumentDetailPage'
+import ArchivesPage from '@/modules/documents/pages/ArchivesPage'
 import ExplorerPage from '@/modules/folders/pages/ExplorerPage'
+import FavoritesPage from '@/modules/favorites/pages/FavoritesPage'
+import AiToolsPage from '@/modules/ai/pages/AiToolsPage'
 import NotificationsPage from '@/modules/notifications/pages/NotificationsPage'
 import ProjectDetailPage from '@/modules/projects/pages/ProjectDetailPage'
 import ProjectsPage from '@/modules/projects/pages/ProjectsPage'
 import RolesPage from '@/modules/roles/pages/RolesPage'
-import SearchPage from '@/modules/search/pages/SearchPage'
 import SettingsPage from '@/modules/settings/pages/SettingsPage'
 import TagsPage from '@/modules/tags/pages/TagsPage'
 import TrashPage from '@/modules/trash/pages/TrashPage'
@@ -39,10 +41,13 @@ export default function AppRoutes() {
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/explorer" element={<ExplorerPage />} />
+          <Route path="/ia" element={<AiToolsPage />} />
+          <Route path="/favorites" element={<FavoritesPage />} />
           <Route path="/documents/:id" element={<DocumentDetailPage />} />
-          <Route path="/search" element={<SearchPage />} />
+          <Route path="/search" element={<Navigate to="/explorer" replace />} />
           <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/shared" element={<MyAccessesPage />} />
+          <Route path="/archives" element={<ArchivesPage />} />
           <Route path="/trash" element={<TrashPage />} />
 
           <Route
@@ -101,14 +106,8 @@ export default function AppRoutes() {
               </RequirePermissionRoute>
             }
           />
-          <Route
-            path="/proposed"
-            element={
-              <RequirePermissionRoute anyOf={['workflows.manage', 'projects.manage']}>
-                <ProposedDocumentsPage />
-              </RequirePermissionRoute>
-            }
-          />
+          <Route path="/validations" element={<ProposedDocumentsPage />} />
+          <Route path="/proposed" element={<Navigate to="/validations?tab=propositions" replace />} />
           <Route
             path="/document-types"
             element={

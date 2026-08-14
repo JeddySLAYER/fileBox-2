@@ -27,6 +27,7 @@ use App\Events\Validation\ValidationActionTaken;
 use App\Listeners\Access\NotifyAccessGranted;
 use App\Listeners\Access\NotifyAccessRevoked;
 use App\Listeners\Comment\NotifyCommentParticipants;
+use App\Listeners\Document\NotifyDocumentArchived;
 use App\Listeners\Document\NotifyDocumentProposed;
 use App\Listeners\Document\NotifyDocumentPublished;
 use App\Listeners\Document\PrepareDocumentForIndexing;
@@ -48,7 +49,10 @@ class EventServiceProvider extends ServiceProvider
         ],
         DocumentVersionCreated::class => [RecordActivityLog::class],
         DocumentContentSaved::class => [RecordActivityLog::class],
-        DocumentArchived::class => [RecordActivityLog::class],
+        DocumentArchived::class => [
+            RecordActivityLog::class,
+            NotifyDocumentArchived::class,
+        ],
         DocumentUnarchived::class => [RecordActivityLog::class],
         DocumentDeleted::class => [RecordActivityLog::class],
         DocumentPublished::class => [

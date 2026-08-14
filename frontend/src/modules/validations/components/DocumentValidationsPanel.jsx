@@ -8,8 +8,9 @@ import EmptyState from '@/components/ui/EmptyState'
 import Input from '@/components/ui/Input'
 import Label from '@/components/ui/Label'
 import LoadingScreen from '@/components/ui/LoadingScreen'
-import { unwrapList, unwrapPaginated } from '@/lib/apiHelpers'
 import { getErrorMessage } from '@/lib/api'
+import { unwrapList, unwrapPaginated } from '@/lib/apiHelpers'
+import { partsFromHours } from '@/lib/duration'
 import { formatDate, validationStatusLabel } from '@/lib/format'
 import { canAny } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
@@ -49,6 +50,8 @@ export default function DocumentValidationsPanel({
   subjectToWorkflow = false,
   recommendsWorkflow = false,
   canPropose = false,
+  requiresWorkflow = false,
+  canStartWorkflow = false,
   onUpdated,
 }) {
   const user = useAuthStore((s) => s.user)
@@ -78,9 +81,9 @@ export default function DocumentValidationsPanel({
   const validations = unwrapList(validationsQuery.data)
   const showStart =
     canStart &&
+    canStartWorkflow &&
     validations.length === 0 &&
-    documentStatus !== 'en_validation' &&
-    ['propose', 'brouillon', 'rejete'].includes(documentStatus)
+    documentStatus !== 'en_validation'
 
   const selectedWorkflowQuery = useQuery({
     queryKey: queryKeys.workflow(effectiveWfId),
@@ -93,7 +96,7 @@ export default function DocumentValidationsPanel({
       Object.fromEntries(
         (selectedWorkflowQuery.data?.steps ?? []).map((s) => [
           s.id,
-          { amount: '1', unit: 'days' },
+          partsFromHours(s.duration_hours),
         ]),
       ),
     [selectedWorkflowQuery.data?.steps],
@@ -104,6 +107,8 @@ export default function DocumentValidationsPanel({
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.documentValidations(documentId) })
     queryClient.invalidateQueries({ queryKey: queryKeys.document(documentId) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.validationsInbox })
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
     onUpdated?.()
   }
 
@@ -186,7 +191,9 @@ export default function DocumentValidationsPanel({
 
   const workflows = unwrapPaginated(workflowsQuery.data).data
   const workflowSteps = selectedWorkflowQuery.data?.steps ?? []
-  const currentPending = validations.find((v) => v.status === 'en_attente')
+  const currentPending = [...validations]
+    .filter((v) => v.status === 'en_attente')
+    .sort((a, b) => (a.workflow_step?.step_order ?? 0) - (b.workflow_step?.step_order ?? 0))[0]
   const canAct = currentPending ? canActOnStep(user, currentPending) : false
 
   if (validationsQuery.isLoading) return <LoadingScreen label="Validations…" />
@@ -195,16 +202,17 @@ export default function DocumentValidationsPanel({
     <div>
       {subjectToWorkflow && documentStatus === 'brouillon' ? (
         <p className="mb-4 text-sm text-muted-foreground">
-          Workflow optionnel : vous pouvez proposer le document, le démarrer directement, ou le
-          laisser hors validation.
-          {recommendsWorkflow ? ' Un workflow est recommandé pour ce type.' : ''}
+          {requiresWorkflow
+            ? 'Ce type exige un circuit de validation : proposez le document, ou un responsable peut démarrer le workflow directement.'
+            : 'Pour lancer un circuit, proposez d’abord le document. Un responsable démarrera ensuite le workflow.'}
+          {recommendsWorkflow && !requiresWorkflow ? ' Un workflow est recommandé pour ce type.' : ''}
         </p>
       ) : null}
 
       {showPropose ? (
         <div className="mb-4 rounded-lg border border-dashed border-border p-4">
           <p className="text-sm text-muted-foreground">
-            Proposez le document pour qu&apos;un responsable démarre éventuellement le workflow.
+            Proposez le document pour qu&apos;un responsable démarre le workflow de validation.
           </p>
           <Button
             className="mt-3"
@@ -250,8 +258,8 @@ export default function DocumentValidationsPanel({
             <div>
               <p className="text-sm font-medium">Délais par étape</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Chaque validateur dispose de ce délai à partir du moment où son étape devient
-                active.
+                Prérempli d’après le workflow. Modifiable au démarrage. Les rappels suivent la
+                configuration de chaque étape.
               </p>
               <ul className="mt-3 space-y-2">
                 {workflowSteps.map((step) => (
@@ -333,8 +341,10 @@ export default function DocumentValidationsPanel({
           title="Aucune validation"
           description={
             subjectToWorkflow
-              ? 'Proposez, démarrez un workflow, ou laissez le document hors validation.'
-              : 'Démarrez un workflow uniquement si une validation formelle est nécessaire.'
+              ? requiresWorkflow
+                ? 'Ce type exige une validation. Proposez le document ou démarrez le workflow.'
+                : 'Proposez le document pour qu’un responsable démarre le workflow.'
+              : 'Ce document n’est pas soumis à un circuit de validation.'
           }
         />
       ) : (
@@ -362,6 +372,9 @@ export default function DocumentValidationsPanel({
                       : v.sla_hours != null && v.status === 'en_attente'
                         ? ' · délai au démarrage de l’étape'
                         : ''}
+                    {v.reminder_hours_before
+                      ? ` · rappel ${formatSla(v.reminder_hours_before)} avant`
+                      : ''}
                   </p>
                 ) : null}
                 {v.comment ? (

@@ -48,6 +48,7 @@ class ProjectController extends Controller
     {
         $this->authorize('view', $project);
 
+        $this->projectService->ensureRootFolder($project);
         $project->load(['department', 'departments', 'manager', 'members', 'rootFolder'])
             ->loadCount('members');
 

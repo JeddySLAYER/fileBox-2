@@ -17,9 +17,23 @@ import EmptyState from '@/components/ui/EmptyState'
 import LoadingScreen from '@/components/ui/LoadingScreen'
 import PageHeader from '@/components/ui/PageHeader'
 import { formatDate, statusLabel } from '@/lib/format'
+import { canAny } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { dashboardApi } from '@/modules/dashboard/api'
 import { useAuthStore } from '@/stores/authStore'
+
+function previewList(items, max = 5) {
+  const list = items ?? []
+  return { shown: list.slice(0, max), hasMore: list.length > max }
+}
+
+function SeeMore({ to, children = 'Voir plus' }) {
+  return (
+    <Link to={to} className="text-xs font-medium text-primary hover:underline">
+      {children}
+    </Link>
+  )
+}
 
 function statusTone(status) {
   if (status === 'valide' || status === 'publie') return 'success'
@@ -81,6 +95,10 @@ function FavoriteRow({ fav }) {
 }
 
 function HomeDashboard({ data }) {
+  const user = useAuthStore((s) => s.user)
+  const canManagePropositions = canAny(user, ['workflows.manage', 'projects.manage'])
+  const recentDocs = previewList(data.recent_documents)
+  const favorites = previewList(data.favorites)
   return (
     <>
       <PageHeader
@@ -115,7 +133,15 @@ function HomeDashboard({ data }) {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Card>
-          <h2 className="text-sm font-semibold">À valider par moi</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">À valider par moi</h2>
+            <div className="flex shrink-0 items-center gap-3">
+              {canManagePropositions ? (
+                <SeeMore to="/validations?tab=propositions">Propositions</SeeMore>
+              ) : null}
+              <SeeMore to="/validations?tab=suivre">À suivre</SeeMore>
+            </div>
+          </div>
           <ul className="mt-4 divide-y divide-border">
             {(data.pending_validations ?? []).length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Rien en attente.</li>
@@ -179,15 +205,18 @@ function HomeDashboard({ data }) {
         </Card>
 
         <Card>
-          <div className="flex items-center gap-2">
-            <Star className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Favoris</h2>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Star className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Favoris</h2>
+            </div>
+            <SeeMore to="/favorites" />
           </div>
           <ul className="mt-4 divide-y divide-border">
-            {(data.favorites ?? []).length === 0 ? (
+            {favorites.shown.length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucun favori.</li>
             ) : (
-              data.favorites.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
+              favorites.shown.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
             )}
           </ul>
         </Card>
@@ -218,15 +247,13 @@ function HomeDashboard({ data }) {
         <Card>
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">Documents récents</h2>
-            <Link to="/explorer" className="text-xs font-medium text-primary hover:underline">
-              Explorateur
-            </Link>
+            <SeeMore to="/explorer" />
           </div>
           <ul className="mt-4 divide-y divide-border">
-            {(data.recent_documents ?? []).length === 0 ? (
+            {recentDocs.shown.length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucun document accessible.</li>
             ) : (
-              data.recent_documents.map((doc) => (
+              recentDocs.shown.map((doc) => (
                 <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
                     <DocLink doc={doc} />
@@ -288,7 +315,8 @@ function HomeDashboard({ data }) {
 }
 
 export default function DashboardPage() {
-  useAuthStore((s) => s.user)
+  const user = useAuthStore((s) => s.user)
+  const canViewActivity = canAny(user, ['settings.manage', 'activity.view'])
 
   const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.dashboard,
@@ -342,7 +370,15 @@ export default function DashboardPage() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-2">
         <Card>
-          <h2 className="text-sm font-semibold">Validations en attente</h2>
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">Validations en attente</h2>
+            <div className="flex shrink-0 items-center gap-3">
+              {canAny(user, ['workflows.manage', 'projects.manage']) ? (
+                <SeeMore to="/validations?tab=propositions">Propositions</SeeMore>
+              ) : null}
+              <SeeMore to="/validations?tab=suivre">À suivre</SeeMore>
+            </div>
+          </div>
           <p className="mt-1 text-xs text-muted-foreground">
             Ouvrez le document pour approuver, demander une correction ou rejeter (commentaire
             obligatoire).
@@ -373,12 +409,15 @@ export default function DashboardPage() {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <Card>
-          <h2 className="text-sm font-semibold">Documents récents</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Documents récents</h2>
+            <SeeMore to="/explorer" />
+          </div>
           <ul className="mt-4 divide-y divide-border">
-            {(data.recent_documents ?? []).length === 0 ? (
+            {previewList(data.recent_documents).shown.length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucun document.</li>
             ) : (
-              data.recent_documents.map((doc) => (
+              previewList(data.recent_documents).shown.map((doc) => (
                 <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
                     <DocLink doc={doc} />
@@ -394,12 +433,15 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <h2 className="text-sm font-semibold">Activité récente</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold">Activité récente</h2>
+            {canViewActivity ? <SeeMore to="/activity" /> : null}
+          </div>
           <ul className="mt-4 divide-y divide-border">
-            {(data.recent_activity ?? []).length === 0 ? (
+            {previewList(data.recent_activity).shown.length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucune activité.</li>
             ) : (
-              data.recent_activity.map((log) => (
+              previewList(data.recent_activity).shown.map((log) => (
                 <li key={log.id} className="py-3">
                   <p className="text-sm">{log.description ?? log.action}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
@@ -412,15 +454,18 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <div className="flex items-center gap-2">
-            <Star className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Favoris</h2>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Star className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Favoris</h2>
+            </div>
+            <SeeMore to="/favorites" />
           </div>
           <ul className="mt-4 divide-y divide-border">
-            {(data.favorites ?? []).length === 0 ? (
+            {previewList(data.favorites).shown.length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucun favori.</li>
             ) : (
-              data.favorites.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
+              previewList(data.favorites).shown.map((fav) => <FavoriteRow key={fav.id} fav={fav} />)
             )}
           </ul>
         </Card>

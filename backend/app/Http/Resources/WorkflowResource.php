@@ -24,6 +24,8 @@ class WorkflowResource extends JsonResource
             'steps' => WorkflowStepResource::collection($this->whenLoaded('steps')),
             'steps_count' => $this->whenCounted('steps'),
             'documents_count' => $this->whenCounted('documents'),
+            'in_validation_count' => $this->whenCounted('in_validation_count'),
+            'in_use' => isset($this->in_validation_count) ? (int) $this->in_validation_count > 0 : false,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
             'deleted_at' => $this->deleted_at,

@@ -6,13 +6,14 @@ import {
   ArrowLeft,
   Download,
   Eye,
-  FileSearch,
   PenLine,
   Pencil,
   Save,
   ScanText,
+  Send,
   Sparkles,
   Star,
+  SunMedium,
   Trash2,
   Upload,
 } from 'lucide-react'
@@ -34,7 +35,7 @@ import DocumentCommentsPanel from '@/modules/comments/components/DocumentComment
 import DocumentValidationsPanel from '@/modules/validations/components/DocumentValidationsPanel'
 import { getErrorMessage } from '@/lib/api'
 import { unwrapList } from '@/lib/apiHelpers'
-import { documentAiCapabilities } from '@/lib/documentAi'
+import { documentAiCapabilities, fileFromBase64 } from '@/lib/documentAi'
 import { fileVisual } from '@/lib/fileIcons'
 import { formatBytes, formatDate, statusLabel } from '@/lib/format'
 import { can, canAny } from '@/lib/permissions'
@@ -67,6 +68,8 @@ export default function DocumentDetailPage() {
   const [compareRight, setCompareRight] = useState('')
   const [comparison, setComparison] = useState(null)
   const [ocrPreview, setOcrPreview] = useState('')
+  const [showOcrModal, setShowOcrModal] = useState(false)
+  const [enhancePreview, setEnhancePreview] = useState(null)
   const [showViewer, setShowViewer] = useState(false)
   const [editing, setEditing] = useState(false)
 
@@ -81,6 +84,7 @@ export default function DocumentDetailPage() {
     setMetaDraft(null)
     setTagIdsDraft(null)
     setOcrPreview('')
+    setEnhancePreview(null)
   }, [id])
 
   const versionsQuery = useQuery({
@@ -191,6 +195,16 @@ export default function DocumentDetailPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
+  const proposeDocument = useMutation({
+    mutationFn: () => documentsApi.propose(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateDoc()
+      queryClient.invalidateQueries({ queryKey: queryKeys.documentValidations(id) })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
   const toggleFavorite = useMutation({
     mutationFn: () =>
       document.is_favorited
@@ -205,17 +219,8 @@ export default function DocumentDetailPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
-  const aiSummarize = useMutation({
+  const aiBrief = useMutation({
     mutationFn: () => documentsApi.aiSummarize(id),
-    onSuccess: (res) => {
-      toast.success(res.message)
-      invalidateDoc()
-    },
-    onError: (e) => toast.error(getErrorMessage(e)),
-  })
-
-  const aiAnalyze = useMutation({
-    mutationFn: () => documentsApi.aiAnalyze(id),
     onSuccess: (res) => {
       toast.success(res.message)
       invalidateDoc()
@@ -227,13 +232,62 @@ export default function DocumentDetailPage() {
     mutationFn: () => documentsApi.aiOcr(id),
     onSuccess: (res) => {
       toast.success(res.message)
-      setOcrPreview(res.ocr_text ?? '')
+      const text = res.ocr_text ?? ''
+      setOcrPreview(text)
+      setShowOcrModal(true)
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const saveOcrDoc = useMutation({
+    mutationFn: () => documentsApi.saveOcrDocument(id, { text: ocrPreview }),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      setShowOcrModal(false)
+      setTab('versions')
       invalidateDoc()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
-  const aiBusy = aiSummarize.isPending || aiAnalyze.isPending || aiOcr.isPending
+  const aiEnhance = useMutation({
+    mutationFn: () => documentsApi.aiEnhance(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      const file = fileFromBase64(res.image_base64, res.file_name, res.mime_type)
+      setEnhancePreview((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url)
+        return {
+          file,
+          mime: res.mime_type,
+          url: URL.createObjectURL(file),
+        }
+      })
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const saveEnhance = useMutation({
+    mutationFn: () => {
+      const form = new FormData()
+      form.append('file', enhancePreview.file)
+      form.append('change_summary', 'Image éclaircie (IA)')
+      return documentsApi.storeVersion(id, form)
+    },
+    onSuccess: (res) => {
+      toast.success(res.message)
+      setEnhancePreview((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url)
+        return null
+      })
+      setTab('versions')
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const aiBusy = aiBrief.isPending || aiOcr.isPending || aiEnhance.isPending
 
   async function handleDownload() {
     try {
@@ -250,6 +304,7 @@ export default function DocumentDetailPage() {
   const visual = fileVisual(document)
   const VisualIcon = visual.Icon
   const ai = documentAiCapabilities(version?.mime_type, version?.extension)
+  const canVersion = canAny(user, ['documents.update', 'versions.manage'])
   const types = unwrapList(typesQuery.data)
   const tags = unwrapList(tagsQuery.data)
   const versions = unwrapList(versionsQuery.data)
@@ -270,7 +325,7 @@ export default function DocumentDetailPage() {
     document.is_editable ? { id: 'content', label: 'Édition' } : null,
     { id: 'comments', label: 'Commentaires' },
     { id: 'validations', label: 'Validations' },
-    canAny(user, ['documents.share', 'accesses.manage'])
+    canAny(user, ['documents.share', 'accesses.manage']) || document.can_share
       ? { id: 'access', label: 'Partage' }
       : null,
   ].filter(Boolean)
@@ -300,6 +355,16 @@ export default function DocumentDetailPage() {
               <Button size="sm" variant="secondary" onClick={() => setTab('content')}>
                 <Pencil className="h-4 w-4" />
                 Éditer
+              </Button>
+            ) : null}
+            {document.can_propose ? (
+              <Button
+                size="sm"
+                disabled={proposeDocument.isPending}
+                onClick={() => proposeDocument.mutate()}
+              >
+                <Send className="h-4 w-4" />
+                Proposer à validation
               </Button>
             ) : null}
             {can(user, 'documents.update') && document.status !== 'archive' ? (
@@ -347,6 +412,27 @@ export default function DocumentDetailPage() {
 
       <Tabs tabs={tabs} active={tab} onChange={setTab} />
 
+      {document.can_propose ? (
+        <div className="mb-4 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm">
+          <p className="font-medium">Proposition à validation</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {document.requires_workflow
+              ? 'Ce type de document exige un circuit de validation. Proposez-le, ou un responsable peut démarrer le workflow depuis l’onglet Validations.'
+              : 'Seuls les documents proposés suivent un workflow. Cliquez sur « Proposer à validation » pour les envoyer aux responsables.'}
+          </p>
+        </div>
+      ) : null}
+
+      {document.status === 'archive' ? (
+        <div className="mb-4 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm">
+          <p className="font-medium">Document archivé</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Consultation et téléchargement uniquement. Il n’apparaît plus dans l’explorateur.
+            Désarchiver le renvoie en brouillon.
+          </p>
+        </div>
+      ) : null}
+
       <Modal
         open={showViewer}
         onClose={() => setShowViewer(false)}
@@ -363,6 +449,82 @@ export default function DocumentDetailPage() {
           heightClass="h-[min(78vh,720px)]"
           onDownload={handleDownload}
         />
+      </Modal>
+
+      <Modal
+        open={showOcrModal}
+        onClose={() => setShowOcrModal(false)}
+        title="Texte extrait (OCR)"
+        description="Vérifiez le texte, puis enregistrez-le comme nouvelle version de ce document."
+        size="lg"
+        footer={
+          <>
+            <Button type="button" variant="secondary" onClick={() => setShowOcrModal(false)}>
+              Fermer
+            </Button>
+            {canVersion ? (
+              <Button
+                type="button"
+                disabled={saveOcrDoc.isPending || !ocrPreview.trim()}
+                onClick={() => saveOcrDoc.mutate()}
+              >
+                <Save className="h-4 w-4" />
+                Enregistrer comme nouvelle version
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+          {ocrPreview || 'Aucun texte.'}
+        </pre>
+      </Modal>
+
+      <Modal
+        open={Boolean(enhancePreview)}
+        onClose={() =>
+          setEnhancePreview((prev) => {
+            if (prev?.url) URL.revokeObjectURL(prev.url)
+            return null
+          })
+        }
+        title="Image éclaircie"
+        description="Vérifiez le rendu, puis enregistrez-le comme nouvelle version de ce document."
+        size="lg"
+        footer={
+          <>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() =>
+                setEnhancePreview((prev) => {
+                  if (prev?.url) URL.revokeObjectURL(prev.url)
+                  return null
+                })
+              }
+            >
+              Fermer
+            </Button>
+            {canVersion ? (
+              <Button
+                type="button"
+                disabled={saveEnhance.isPending || !enhancePreview?.file}
+                onClick={() => saveEnhance.mutate()}
+              >
+                <Save className="h-4 w-4" />
+                Enregistrer comme nouvelle version
+              </Button>
+            ) : null}
+          </>
+        }
+      >
+        {enhancePreview?.url ? (
+          <img
+            src={enhancePreview.url}
+            alt="Image éclaircie"
+            className="mx-auto max-h-[60vh] max-w-full rounded-lg border border-border object-contain"
+          />
+        ) : null}
       </Modal>
 
       <div className="mt-6">
@@ -402,7 +564,9 @@ export default function DocumentDetailPage() {
                 {[
                   { label: 'Référence', value: document.reference },
                   { label: 'Auteur', value: document.author?.name },
-                  { label: 'Type documentaire', value: document.document_type?.name },
+                  { label: 'Type documentaire', value: document.document_type?.name
+                    ? `${document.document_type.name}${document.requires_workflow ? ' · validation obligatoire' : ''}`
+                    : null },
                   { label: 'Confidentialité', value: document.confidentiality },
                   { label: 'Créé le', value: formatDate(document.created_at, true) },
                   {
@@ -560,30 +724,22 @@ export default function DocumentDetailPage() {
                   <h2 className="text-sm font-semibold">Assistant IA</h2>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Disponible pour ce format
-                  {ai.ocr ? ' (texte, PDF ou image)' : ' (fichier texte)'}.
+                  {ai.enhance
+                    ? 'Analyse, OCR ou éclaircissement. OCR et éclaircissement ne sont enregistrés que si vous créez une nouvelle version.'
+                    : ai.ocr
+                      ? 'Analyse du contenu, ou extraction OCR (nouvelle version).'
+                      : 'Analyse du contenu de ce fichier texte.'}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {ai.summarize ? (
+                  {ai.brief ? (
                     <Button
                       size="sm"
                       variant="secondary"
                       disabled={aiBusy}
-                      onClick={() => aiSummarize.mutate()}
-                    >
-                      <FileSearch className="h-4 w-4" />
-                      Résumer
-                    </Button>
-                  ) : null}
-                  {ai.analyze ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={aiBusy}
-                      onClick={() => aiAnalyze.mutate()}
+                      onClick={() => aiBrief.mutate()}
                     >
                       <Sparkles className="h-4 w-4" />
-                      Analyser / expliquer
+                      Analyser
                     </Button>
                   ) : null}
                   {ai.ocr ? (
@@ -594,31 +750,31 @@ export default function DocumentDetailPage() {
                       onClick={() => aiOcr.mutate()}
                     >
                       <ScanText className="h-4 w-4" />
-                      OCR (scan / image)
+                      Extraire le texte (OCR)
+                    </Button>
+                  ) : null}
+                  {ai.enhance ? (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={aiBusy}
+                      onClick={() => aiEnhance.mutate()}
+                    >
+                      <SunMedium className="h-4 w-4" />
+                      Éclaircir l’image
                     </Button>
                   ) : null}
                 </div>
 
                 {document.summary ? (
                   <div className="mt-4">
-                    <p className="text-xs font-medium text-muted-foreground">Résumé</p>
+                    <p className="text-xs font-medium text-muted-foreground">Fiche IA</p>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{document.summary}</p>
                   </div>
-                ) : null}
-
-                {document.ai_analysis ? (
+                ) : document.ai_analysis ? (
                   <div className="mt-4">
-                    <p className="text-xs font-medium text-muted-foreground">Analyse</p>
+                    <p className="text-xs font-medium text-muted-foreground">Fiche IA</p>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{document.ai_analysis}</p>
-                  </div>
-                ) : null}
-
-                {ocrPreview || version?.has_ocr ? (
-                  <div className="mt-4">
-                    <p className="text-xs font-medium text-muted-foreground">Texte OCR</p>
-                    <p className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap text-sm text-muted-foreground">
-                      {ocrPreview || 'OCR déjà extrait sur cette version (relancez pour réafficher).'}
-                    </p>
                   </div>
                 ) : null}
 
@@ -833,6 +989,8 @@ export default function DocumentDetailPage() {
             subjectToWorkflow={document.subject_to_workflow}
             recommendsWorkflow={document.recommends_workflow}
             canPropose={document.can_propose}
+            requiresWorkflow={document.requires_workflow}
+            canStartWorkflow={document.can_start_workflow}
             onUpdated={invalidateDoc}
           />
         ) : null}

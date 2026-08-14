@@ -27,7 +27,14 @@ const emptyForm = {
   is_active: true,
 }
 
+const ROLES_WITHOUT_DEPARTMENT = ['invite', 'administrateur', 'direction', 'chef_projet']
+
 const selectClass = 'h-11 w-full rounded-lg border border-border bg-background px-3 text-sm'
+
+function hasNoDepartmentRole(roles, roleIds) {
+  const selected = new Set((roleIds ?? []).map(String))
+  return roles.some((r) => selected.has(String(r.id)) && ROLES_WITHOUT_DEPARTMENT.includes(r.slug))
+}
 
 export default function UsersPage() {
   const queryClient = useQueryClient()
@@ -68,7 +75,11 @@ export default function UsersPage() {
       usersApi.create({
         name: form.name,
         email: form.email,
-        department_id: form.department_id ? Number(form.department_id) : null,
+        department_id: hasNoDepartmentRole(roles, form.role_ids)
+          ? null
+          : form.department_id
+            ? Number(form.department_id)
+            : null,
         role_ids: form.role_ids.map(Number),
         is_active: true,
         replace_department_manager: opts.replace_department_manager || undefined,
@@ -88,7 +99,11 @@ export default function UsersPage() {
       usersApi.update(editingId, {
         name: form.name,
         email: form.email,
-        department_id: form.department_id ? Number(form.department_id) : null,
+        department_id: hasNoDepartmentRole(roles, form.role_ids)
+          ? null
+          : form.department_id
+            ? Number(form.department_id)
+            : null,
         role_ids: form.role_ids.map(Number),
         is_active: form.is_active,
         replace_department_manager: opts.replace_department_manager || undefined,
@@ -126,8 +141,7 @@ export default function UsersPage() {
   const roles = unwrapList(rolesQuery.data)
   const departments = unwrapList(departmentsQuery.data)
   const saving = createUser.isPending || updateUser.isPending
-  const inviteRole = roles.find((r) => r.slug === 'invite')
-  const isInvite = Boolean(inviteRole && form.role_ids.includes(String(inviteRole.id)))
+  const withoutDepartment = hasNoDepartmentRole(roles, form.role_ids)
 
   function closeForm() {
     setShowForm(false)
@@ -143,14 +157,13 @@ export default function UsersPage() {
 
   function openEdit(user) {
     const roleIds = (user.roles ?? []).map((r) => String(r.id))
-    const invite = roles.find((r) => r.slug === 'invite')
-    const guest = Boolean(invite && roleIds.includes(String(invite.id)))
+    const hideDept = hasNoDepartmentRole(user.roles ?? roles, roleIds)
 
     setEditingId(user.id)
     setForm({
       name: user.name ?? '',
       email: user.email ?? '',
-      department_id: guest
+      department_id: hideDept
         ? ''
         : user.department_id != null
           ? String(user.department_id)
@@ -177,9 +190,14 @@ export default function UsersPage() {
       if (inviteId && sid === inviteId) {
         return { ...prev, role_ids: [inviteId], department_id: '' }
       }
+      const nextRoles = [...prev.role_ids.filter((id) => id !== inviteId), sid]
+      const picked = roles.find((r) => String(r.id) === sid)
       return {
         ...prev,
-        role_ids: [...prev.role_ids.filter((id) => id !== inviteId), sid],
+        role_ids: nextRoles,
+        department_id: ROLES_WITHOUT_DEPARTMENT.includes(picked?.slug)
+          ? ''
+          : prev.department_id,
       }
     })
   }
@@ -412,7 +430,7 @@ export default function UsersPage() {
               onChange={(e) => setForm({ ...form, email: e.target.value })}
             />
           </div>
-          {!isInvite ? (
+          {!withoutDepartment ? (
             <div>
               <Label htmlFor="u-dept">Département</Label>
               <select
@@ -431,7 +449,7 @@ export default function UsersPage() {
             </div>
           ) : null}
           {editingId ? (
-            <div className={`flex flex-col justify-end ${isInvite ? 'sm:col-span-2' : ''}`}>
+            <div className={`flex flex-col justify-end ${withoutDepartment ? 'sm:col-span-2' : ''}`}>
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -450,7 +468,8 @@ export default function UsersPage() {
           <div className="sm:col-span-2">
             <Label>Rôles</Label>
             <p className="mb-2 text-xs text-muted-foreground">
-              Le rôle Invité est exclusif et ne peut pas être combiné avec d’autres rôles.
+              Le rôle Invité est exclusif. Administrateur, chef de projet, direction et invité
+              ne sont pas rattachés à un département.
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {roles.map((role) => (

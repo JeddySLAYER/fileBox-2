@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from 'react-router-dom'
-import { Plus, Trash2 } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import RequirePermission from '@/components/RequirePermission'
 import Badge from '@/components/ui/Badge'
 import Button from '@/components/ui/Button'
@@ -13,26 +14,35 @@ import Modal from '@/components/ui/Modal'
 import PageHeader from '@/components/ui/PageHeader'
 import { unwrapPaginated, PAGE_SIZE } from '@/lib/apiHelpers'
 import { getErrorMessage } from '@/lib/api'
+import {
+  emptyStepTiming,
+  stepTimingFromApi,
+  timingPayload,
+  validateStepTiming,
+} from '@/lib/duration'
 import { queryKeys } from '@/lib/queryClient'
 import { usersApi } from '@/modules/users/api'
 import { workflowsApi } from '@/modules/workflows/api'
+import WorkflowStepTimingFields from '@/modules/workflows/components/WorkflowStepTimingFields'
 
 function emptyStep() {
-  return { responsible_user_id: '', is_mandatory: true }
+  return { responsible_user_id: '', is_mandatory: true, ...emptyStepTiming() }
 }
 
 const emptyForm = {
   name: '',
   code: '',
   description: '',
+  is_active: true,
   steps: [emptyStep()],
 }
 
 export default function WorkflowsPage() {
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [page, setPage] = useState(1)
   const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
   const [form, setForm] = useState(emptyForm)
 
   const listParams = { per_page: PAGE_SIZE, page }
@@ -56,29 +66,49 @@ export default function WorkflowsPage() {
   )
 
   const createWorkflow = useMutation({
-    mutationFn: () =>
-      workflowsApi.create({
-        name: form.name,
-        code: form.code || undefined,
-        description: form.description || undefined,
-        is_active: true,
-        steps: form.steps.map((s, i) => ({
-          name: `Validation ${i + 1}`,
-          step_order: i + 1,
-          responsible_user_id: Number(s.responsible_user_id),
-          is_mandatory: Boolean(s.is_mandatory),
-        })),
-      }),
+    mutationFn: () => workflowsApi.create(workflowPayload()),
     onSuccess: (data) => {
       toast.success(data.message)
-      setShowForm(false)
-      setForm(emptyForm)
+      closeForm()
       queryClient.invalidateQueries({ queryKey: ['workflows'] })
-      const id = data.workflow?.id
-      if (id) navigate(`/workflows/${id}`)
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
+
+  const updateWorkflow = useMutation({
+    mutationFn: () => workflowsApi.update(editingId, workflowPayload()),
+    onSuccess: (data) => {
+      toast.success(data.message)
+      closeForm()
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const removeWorkflow = useMutation({
+    mutationFn: (id) => workflowsApi.remove(id),
+    onSuccess: (data) => {
+      toast.success(data.message)
+      queryClient.invalidateQueries({ queryKey: ['workflows'] })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  function workflowPayload() {
+    return {
+      name: form.name,
+      code: form.code || undefined,
+      description: form.description || undefined,
+      is_active: Boolean(form.is_active),
+      steps: form.steps.map((s, i) => ({
+        name: `Validation ${i + 1}`,
+        step_order: i + 1,
+        responsible_user_id: Number(s.responsible_user_id),
+        is_mandatory: Boolean(s.is_mandatory),
+        ...timingPayload(s),
+      })),
+    }
+  }
 
   function updateStep(index, patch) {
     setForm((prev) => {
@@ -90,7 +120,34 @@ export default function WorkflowsPage() {
 
   function closeForm() {
     setShowForm(false)
+    setEditingId(null)
     setForm(emptyForm)
+  }
+
+  function openCreate() {
+    setEditingId(null)
+    setForm(emptyForm)
+    setShowForm(true)
+  }
+
+  function openEdit(wf) {
+    if (wf.in_use) return
+    setEditingId(wf.id)
+    setForm({
+      name: wf.name ?? '',
+      code: wf.code ?? '',
+      description: wf.description ?? '',
+      is_active: Boolean(wf.is_active),
+      steps:
+        (wf.steps ?? []).length > 0
+          ? wf.steps.map((s) => ({
+              responsible_user_id: s.responsible_user?.id ?? '',
+              is_mandatory: s.is_mandatory ?? true,
+              ...stepTimingFromApi(s),
+            }))
+          : [emptyStep()],
+    })
+    setShowForm(true)
   }
 
   const { data: workflows, meta } = unwrapPaginated(workflowsQuery.data)
@@ -134,20 +191,59 @@ export default function WorkflowsPage() {
       header: 'Documents',
       cell: (wf) => wf.documents_count ?? 0,
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      className: 'w-[1%] whitespace-nowrap',
+      cell: (wf) => (
+        <div className="flex gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            title={
+              wf.in_use
+                ? 'Impossible : des documents sont en cours de validation'
+                : 'Modifier'
+            }
+            disabled={wf.in_use}
+            onClick={() => openEdit(wf)}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+          variant="ghost"
+          size="sm"
+          title={
+            wf.in_use
+              ? 'Impossible : des documents sont en cours de validation'
+              : 'Supprimer'
+          }
+          disabled={wf.in_use || removeWorkflow.isPending}
+          onClick={async () => {
+            const ok = await confirm({
+              title: 'Supprimer le workflow',
+              description: `Supprimer « ${wf.name} » ? Les documents et types qui l’utilisent n’y seront plus liés.`,
+              confirmLabel: 'Supprimer',
+            })
+            if (ok) removeWorkflow.mutate(wf.id)
+          }}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+        </div>
+      ),
+    },
   ]
 
   return (
     <RequirePermission permission="workflows.manage">
       <PageHeader
         title="Workflows"
-        description="Circuits de validation documentaire."
+        description="Circuits de validation documentaire. Modifiez ou supprimez un workflow tant qu’aucun document n’est en cours de validation."
         actions={
           <Button
             size="sm"
-            onClick={() => {
-              setForm(emptyForm)
-              setShowForm(true)
-            }}
+            onClick={openCreate}
           >
             <Plus className="h-4 w-4" />
             Nouveau workflow
@@ -167,16 +263,20 @@ export default function WorkflowsPage() {
       <Modal
         open={showForm}
         onClose={closeForm}
-        title="Nouveau workflow"
-        description="Chaque étape est une validation assignée à un utilisateur distinct."
+        title={editingId ? 'Modifier le workflow' : 'Nouveau workflow'}
+        description="Chaque étape est une validation assignée à un utilisateur, avec une durée et un rappel."
         size="lg"
         footer={
           <>
             <Button type="button" variant="secondary" onClick={closeForm}>
               Annuler
             </Button>
-            <Button type="submit" form="wf-form" disabled={createWorkflow.isPending}>
-              Créer
+            <Button
+              type="submit"
+              form="wf-form"
+              disabled={createWorkflow.isPending || updateWorkflow.isPending}
+            >
+              {editingId ? 'Enregistrer' : 'Créer'}
             </Button>
           </>
         }
@@ -199,7 +299,13 @@ export default function WorkflowsPage() {
               toast.error('Un utilisateur ne peut être choisi qu’une fois dans le workflow.')
               return
             }
-            createWorkflow.mutate()
+            const timingError = form.steps.map(validateStepTiming).find(Boolean)
+            if (timingError) {
+              toast.error(timingError)
+              return
+            }
+            if (editingId) updateWorkflow.mutate()
+            else createWorkflow.mutate()
           }}
         >
           <div className="grid gap-4 sm:grid-cols-2">
@@ -228,6 +334,16 @@ export default function WorkflowsPage() {
                 onChange={(e) => setForm({ ...form, description: e.target.value })}
               />
             </div>
+            {editingId ? (
+              <label className="sm:col-span-2 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.is_active)}
+                  onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
+                />
+                Workflow actif
+              </label>
+            ) : null}
           </div>
 
           <div>
@@ -289,6 +405,10 @@ export default function WorkflowsPage() {
                         ))}
                       </select>
                     </div>
+                    <WorkflowStepTimingFields
+                      step={step}
+                      onChange={(patch) => updateStep(index, patch)}
+                    />
                   </li>
                 )
               })}

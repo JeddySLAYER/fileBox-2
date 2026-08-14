@@ -10,6 +10,7 @@ use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class DepartmentService
 {
@@ -138,6 +139,12 @@ class DepartmentService
         }
 
         $user = User::query()->findOrFail($userId);
+        if ($user->roles()->whereIn('slug', User::ROLES_WITHOUT_DEPARTMENT)->exists()) {
+            throw ValidationException::withMessages([
+                'manager_id' => ['Un administrateur, chef de projet, directeur ou invité ne peut pas être responsable d’un département.'],
+            ]);
+        }
+
         $user->department_id = $departmentId;
         $user->save();
 

@@ -7,11 +7,14 @@ import {
   ChevronRight,
   FilePlus2,
   FolderInput,
+  FolderOpen,
   FolderPlus,
   LayoutGrid,
   List,
   MoreVertical,
   Pencil,
+  Search,
+  Share2,
   Star,
   Trash2,
   Type,
@@ -30,13 +33,18 @@ import PageHeader from '@/components/ui/PageHeader'
 import { getErrorMessage } from '@/lib/api'
 import { unwrapList, unwrapPaginated } from '@/lib/apiHelpers'
 import { fileVisual, folderVisual } from '@/lib/fileIcons'
-import { formatDate, statusLabel } from '@/lib/format'
-import { can } from '@/lib/permissions'
+import { documentStatusLabels, formatDate, statusLabel } from '@/lib/format'
+import { can, hasRole, seesAllSpaces } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { cn } from '@/lib/cn'
+import { departmentsApi } from '@/modules/departments/api'
 import { documentsApi } from '@/modules/documents/api'
+import LocalFilePreview, { titleFromFile } from '@/modules/documents/components/LocalFilePreview'
+import { documentTypesApi } from '@/modules/document-types/api'
+import DocumentAccessPanel from '@/modules/access/components/DocumentAccessPanel'
 import { favoritesApi } from '@/modules/favorites/api'
 import { foldersApi } from '@/modules/folders/api'
+import { searchApi } from '@/modules/search/api'
 import { tagsApi } from '@/modules/tags/api'
 import { useAuthStore } from '@/stores/authStore'
 
@@ -70,22 +78,49 @@ export default function ExplorerPage() {
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const folderId = params.get('folder') ? Number(params.get('folder')) : null
+  const searchQ = params.get('q') ?? ''
+  const searchStatus = params.get('status') ?? ''
+  const searchType = params.get('type') ?? ''
+  const isSearching = searchQ.trim().length >= 2 || Boolean(searchStatus) || Boolean(searchType)
 
   const [viewMode, setViewMode] = useState(() => localStorage.getItem(VIEW_KEY) || 'grid')
   const [showFolderForm, setShowFolderForm] = useState(false)
   const [showDocForm, setShowDocForm] = useState(false)
   const [folderName, setFolderName] = useState('')
   const [folderTagIds, setFolderTagIds] = useState([])
+  const [folderPublicDept, setFolderPublicDept] = useState(false)
+  const [folderDepartmentId, setFolderDepartmentId] = useState('')
   const [docTitle, setDocTitle] = useState('')
   const [docDescription, setDocDescription] = useState('')
+  const [docTypeId, setDocTypeId] = useState('')
   const [docFile, setDocFile] = useState(null)
   const [docTagIds, setDocTagIds] = useState([])
+  const [docDropActive, setDocDropActive] = useState(false)
+  const [explorerDropActive, setExplorerDropActive] = useState(false)
+  const [qDraft, setQDraft] = useState(searchQ)
 
   const [renameTarget, setRenameTarget] = useState(null) // { type, id, name }
   const [renameValue, setRenameValue] = useState('')
   const [moveTarget, setMoveTarget] = useState(null) // { type, id, name }
   const [moveParentId, setMoveParentId] = useState('')
   const [menu, setMenu] = useState(null) // { item, x, y }
+  const [shareTarget, setShareTarget] = useState(null) // { type, id, name }
+
+  useEffect(() => {
+    setQDraft(searchQ)
+  }, [searchQ])
+
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      const next = qDraft.trim()
+      if (next === searchQ) return
+      const p = new URLSearchParams(params)
+      if (next) p.set('q', next)
+      else p.delete('q')
+      setParams(p, { replace: true })
+    }, 400)
+    return () => window.clearTimeout(handle)
+  }, [qDraft, searchQ, params, setParams])
 
   const folderFilters = useMemo(() => {
     if (folderId == null) return {}
@@ -93,7 +128,7 @@ export default function ExplorerPage() {
   }, [folderId])
 
   const docFilters = useMemo(() => {
-    if (folderId == null) return null
+    if (folderId == null) return { explorer_root: 1, per_page: 100 }
     return { folder_id: folderId, per_page: 100 }
   }, [folderId])
 
@@ -103,20 +138,31 @@ export default function ExplorerPage() {
   })
 
   const documentsQuery = useQuery({
-    queryKey: queryKeys.documents(docFilters || {}),
+    queryKey: queryKeys.documents(docFilters),
     queryFn: () => documentsApi.list(docFilters),
-    enabled: Boolean(docFilters),
+    enabled: !isSearching,
   })
 
-  const allFoldersQuery = useQuery({
-    queryKey: ['folders', 'tree-flat'],
-    queryFn: () => foldersApi.tree(),
-    enabled: Boolean(moveTarget),
+  const typesQuery = useQuery({
+    queryKey: queryKeys.documentTypes({}),
+    queryFn: () => documentTypesApi.list(),
   })
 
-  const treeQuery = useQuery({
-    queryKey: queryKeys.folders({ tree: true }),
-    queryFn: () => foldersApi.tree(),
+  const searchQuery = useQuery({
+    queryKey: queryKeys.search({
+      q: searchQ.trim(),
+      status: searchStatus,
+      document_type_id: searchType,
+    }),
+    queryFn: () =>
+      searchApi.search({
+        q: searchQ.trim() || undefined,
+        status: searchStatus || undefined,
+        document_type_id: searchType || undefined,
+        per_page: 50,
+        include_folders: searchQ.trim().length >= 2,
+      }),
+    enabled: isSearching,
   })
 
   const currentFolderQuery = useQuery({
@@ -125,18 +171,48 @@ export default function ExplorerPage() {
     enabled: folderId != null,
   })
 
+  const projectId = currentFolderQuery.data?.project?.id ?? null
+
+  const allFoldersQuery = useQuery({
+    queryKey: ['folders', 'tree-flat', projectId],
+    queryFn: () => foldersApi.tree(projectId ? { project_id: projectId } : {}),
+    enabled: Boolean(moveTarget),
+  })
+
+  const treeQuery = useQuery({
+    queryKey: queryKeys.folderTree({ project_id: projectId }),
+    queryFn: () => foldersApi.tree(projectId ? { project_id: projectId } : {}),
+  })
+
+  const projectSpacesQuery = useQuery({
+    queryKey: queryKeys.folders({ project_roots: true }),
+    queryFn: () => foldersApi.list({ project_roots: 1 }),
+  })
+
   const favoritesQuery = useQuery({
     queryKey: queryKeys.favorites,
     queryFn: () => favoritesApi.list(),
   })
 
   const canPickTags = can(user, 'tags.manage')
+  const canCreateDeptFolder = can(user, 'projects.manage')
+  const pickDepartments =
+    hasRole(user, 'administrateur') || hasRole(user, 'direction') || hasRole(user, 'chef_projet')
+  const lockedDeptId = user?.department_id ? String(user.department_id) : null
+
   const tagsQuery = useQuery({
     queryKey: queryKeys.tags,
     queryFn: tagsApi.list,
     enabled: canPickTags && (showFolderForm || showDocForm),
   })
   const availableTags = unwrapList(tagsQuery.data)
+
+  const departmentsQuery = useQuery({
+    queryKey: queryKeys.departments({ per_page: 100 }),
+    queryFn: () => departmentsApi.list({ per_page: 100 }),
+    enabled: showFolderForm && !folderId && canCreateDeptFolder && pickDepartments,
+  })
+  const departmentOptions = unwrapPaginated(departmentsQuery.data).data
 
   const favoritedFolderIds = useMemo(() => {
     const list = unwrapList(favoritesQuery.data)
@@ -153,6 +229,13 @@ export default function ExplorerPage() {
     queryClient.invalidateQueries({ queryKey: ['documents'] })
     queryClient.invalidateQueries({ queryKey: queryKeys.favorites })
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
+  }
+
+  function resetFolderForm() {
+    setFolderName('')
+    setFolderTagIds([])
+    setFolderPublicDept(false)
+    setFolderDepartmentId('')
   }
 
   const toggleFolderFavorite = useMutation({
@@ -178,16 +261,23 @@ export default function ExplorerPage() {
   })
 
   const createFolder = useMutation({
-    mutationFn: () =>
-      foldersApi.create({
+    mutationFn: () => {
+      const payload = {
         name: folderName,
         parent_id: folderId,
         ...(folderTagIds.length ? { tag_ids: folderTagIds.map(Number) } : {}),
-      }),
+      }
+      if (!folderId && folderPublicDept && canCreateDeptFolder) {
+        const deptId = pickDepartments ? folderDepartmentId : lockedDeptId
+        if (deptId) payload.department_id = Number(deptId)
+      }
+      return foldersApi.create(payload)
+    },
     onSuccess: () => {
-      toast.success('Dossier créé')
-      setFolderName('')
-      setFolderTagIds([])
+      toast.success(
+        folderPublicDept && !folderId ? 'Dossier public de département créé' : 'Dossier créé',
+      )
+      resetFolderForm()
       setShowFolderForm(false)
       invalidateExplorer()
     },
@@ -201,16 +291,14 @@ export default function ExplorerPage() {
       form.append('title', docTitle)
       if (docDescription.trim()) form.append('description', docDescription.trim())
       form.append('folder_id', String(folderId))
+      if (docTypeId) form.append('document_type_id', String(docTypeId))
       form.append('file', docFile)
       docTagIds.forEach((id) => form.append('tag_ids[]', String(id)))
       return documentsApi.create(form)
     },
     onSuccess: () => {
       toast.success('Document créé')
-      setDocTitle('')
-      setDocDescription('')
-      setDocFile(null)
-      setDocTagIds([])
+      resetDocForm()
       setShowDocForm(false)
       invalidateExplorer()
     },
@@ -268,14 +356,27 @@ export default function ExplorerPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
-  const folders = unwrapList(foldersQuery.data)
-  const documents = docFilters ? unwrapPaginated(documentsQuery.data).data : []
+  const folders = isSearching
+    ? unwrapList(searchQuery.data?.folders)
+    : unwrapList(foldersQuery.data)
+  const documents = isSearching
+    ? unwrapPaginated(searchQuery.data?.documents).data
+    : unwrapPaginated(documentsQuery.data).data
+  const docTypes = unwrapList(typesQuery.data)
   const currentFolder = currentFolderQuery.data
   const moveDestinations = useMemo(
     () => flattenFolders(unwrapList(allFoldersQuery.data)),
     [allFoldersQuery.data],
   )
   const treeRoots = unwrapList(treeQuery.data)
+  const projectSpaces = unwrapList(projectSpacesQuery.data)
+  const inProjectSpace = Boolean(currentFolder?.is_project_root || currentFolder?.project)
+  const projectRootId =
+    currentFolder?.project?.root_folder_id ??
+    (currentFolder?.is_project_root ? currentFolder.id : null)
+  const projectLabel = currentFolder?.project?.name ?? currentFolder?.name ?? 'Projet'
+  const globalSpaces = seesAllSpaces(user)
+  const rootLabel = globalSpaces ? 'Racine' : 'Mes espaces'
 
   const currentIsFavorite =
     folderId != null &&
@@ -288,8 +389,14 @@ export default function ExplorerPage() {
       id: f.id,
       name: f.name,
       isFavorite: Boolean(f.is_favorited || favoritedFolderIds.has(f.id)),
-      meta: `${f.documents_count ?? 0} doc · ${f.children_count ?? 0} sous-dossiers`,
+      meta: [
+        f.department && !f.project ? f.department.name : null,
+        `${f.documents_count ?? 0} doc · ${f.children_count ?? 0} sous-dossiers`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       date: f.updated_at || f.created_at,
+      canShare: Boolean(f.can_share),
       raw: f,
       visual: folderVisual(),
     }))
@@ -305,6 +412,7 @@ export default function ExplorerPage() {
         status: d.status,
         date: d.updated_at || d.created_at,
         isEditable: Boolean(d.is_editable),
+        canShare: Boolean(d.can_share),
         raw: d,
         visual,
       }
@@ -316,6 +424,10 @@ export default function ExplorerPage() {
     const next = new URLSearchParams(params)
     if (id == null) next.delete('folder')
     else next.set('folder', String(id))
+    next.delete('q')
+    next.delete('status')
+    next.delete('type')
+    setQDraft('')
     setParams(next)
   }
 
@@ -356,6 +468,43 @@ export default function ExplorerPage() {
   const canUpdateDoc = can(user, 'documents.update')
   const canDeleteDoc = can(user, 'documents.delete')
   const canArchiveDoc = can(user, 'documents.archive')
+  const canCreateDoc = can(user, 'documents.create')
+
+  function resetDocForm() {
+    setDocTitle('')
+    setDocDescription('')
+    setDocTypeId('')
+    setDocFile(null)
+    setDocTagIds([])
+    setDocDropActive(false)
+  }
+
+  function applyPickedFile(file, { fillTitle = true } = {}) {
+    if (!file) return
+    setDocFile(file)
+    if (fillTitle) {
+      setDocTitle((current) => (current.trim() ? current : titleFromFile(file)))
+    }
+  }
+
+  function openCreateDoc(file = null) {
+    if (!folderId) {
+      toast.error('Ouvrez un dossier pour ajouter un document.')
+      return
+    }
+    if (!canCreateDoc) return
+    resetDocForm()
+    if (file) applyPickedFile(file)
+    setShowDocForm(true)
+  }
+
+  function takeDroppedFile(event) {
+    event.preventDefault()
+    event.stopPropagation()
+    setExplorerDropActive(false)
+    setDocDropActive(false)
+    return event.dataTransfer?.files?.[0] ?? null
+  }
 
   function openMenu(item, event) {
     event.preventDefault()
@@ -395,15 +544,21 @@ export default function ExplorerPage() {
     fn?.()
   }
 
-  if (foldersQuery.isLoading || (docFilters && documentsQuery.isLoading)) {
+  if (foldersQuery.isLoading || (!isSearching && documentsQuery.isLoading)) {
     return <LoadingScreen />
   }
 
   return (
     <>
       <PageHeader
-        title="Explorateur"
-        description="Parcourez, organisez et gérez dossiers et documents."
+        title={inProjectSpace ? `Espace — ${projectLabel}` : 'Explorateur'}
+        description={
+          inProjectSpace
+            ? 'Dossier dédié au projet : ajoutez-y les ressources associées. Il n’apparaît pas à la racine de l’explorateur.'
+            : globalSpaces
+              ? 'Parcourez, organisez et gérez dossiers et documents.'
+              : 'Uniquement les espaces auxquels vous appartenez (département, projets, dossiers personnels).'
+        }
         actions={
           <>
             <div className="flex rounded-lg border border-border p-0.5">
@@ -437,6 +592,10 @@ export default function ExplorerPage() {
                 {currentIsFavorite ? 'Retirer' : 'Favori'}
               </Button>
             ) : null}
+            <Button as={Link} to="/archives" variant="ghost" size="sm">
+              <ArchiveRestore className="h-4 w-4" />
+              Archives
+            </Button>
             <Button as={Link} to="/trash" variant="ghost" size="sm">
               <Trash2 className="h-4 w-4" />
               Corbeille
@@ -446,8 +605,7 @@ export default function ExplorerPage() {
                 variant="secondary"
                 size="sm"
                 onClick={() => {
-                  setFolderName('')
-                  setFolderTagIds([])
+                  resetFolderForm()
                   setShowFolderForm(true)
                 }}
               >
@@ -458,13 +616,7 @@ export default function ExplorerPage() {
             {can(user, 'documents.create') ? (
               <Button
                 size="sm"
-                onClick={() => {
-                  setDocTitle('')
-                  setDocDescription('')
-                  setDocFile(null)
-                  setDocTagIds([])
-                  setShowDocForm(true)
-                }}
+                onClick={() => openCreateDoc()}
                 disabled={!folderId}
                 title={!folderId ? 'Ouvrez un dossier pour uploader' : undefined}
               >
@@ -477,29 +629,105 @@ export default function ExplorerPage() {
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-        <button type="button" className="hover:text-primary" onClick={() => openFolder(null)}>
-          Racine
-        </button>
-        {folderId ? (
+        {inProjectSpace ? (
           <>
+            <button type="button" className="hover:text-primary" onClick={() => openFolder(null)}>
+              Explorateur
+            </button>
             <ChevronRight className="h-3 w-3" />
-            <span className="text-foreground">{currentFolder?.name ?? `Dossier #${folderId}`}</span>
+            <button
+              type="button"
+              className={cn(
+                'hover:text-primary',
+                folderId === projectRootId && 'text-foreground font-medium',
+              )}
+              onClick={() => projectRootId && openFolder(projectRootId)}
+            >
+              {projectLabel}
+            </button>
+            {folderId && folderId !== projectRootId ? (
+              <>
+                <ChevronRight className="h-3 w-3" />
+                <span className="text-foreground">{currentFolder?.name ?? `Dossier #${folderId}`}</span>
+              </>
+            ) : null}
           </>
-        ) : null}
+        ) : (
+          <>
+            <button type="button" className="hover:text-primary" onClick={() => openFolder(null)}>
+              {rootLabel}
+            </button>
+            {folderId ? (
+              <>
+                <ChevronRight className="h-3 w-3" />
+                <span className="text-foreground">{currentFolder?.name ?? `Dossier #${folderId}`}</span>
+              </>
+            ) : null}
+          </>
+        )}
+      </div>
+
+      <div className="mb-4 flex flex-col gap-2 rounded-xl border border-border bg-background p-3 sm:flex-row sm:items-center">
+        <div className="relative min-w-0 flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            value={qDraft}
+            onChange={(e) => setQDraft(e.target.value)}
+            placeholder="Rechercher un document ou un dossier…"
+          />
+        </div>
+        <select
+          className="h-11 rounded-lg border border-border bg-background px-3 text-sm sm:w-40"
+          value={searchStatus}
+          onChange={(e) => {
+            const p = new URLSearchParams(params)
+            if (e.target.value) p.set('status', e.target.value)
+            else p.delete('status')
+            setParams(p, { replace: true })
+          }}
+        >
+          <option value="">Tous les statuts</option>
+          {Object.entries(documentStatusLabels).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <select
+          className="h-11 rounded-lg border border-border bg-background px-3 text-sm sm:w-44"
+          value={searchType}
+          onChange={(e) => {
+            const p = new URLSearchParams(params)
+            if (e.target.value) p.set('type', e.target.value)
+            else p.delete('type')
+            setParams(p, { replace: true })
+          }}
+        >
+          <option value="">Tous les types</option>
+          {docTypes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <Modal
         open={showFolderForm}
         onClose={() => {
           setShowFolderForm(false)
-          setFolderName('')
-          setFolderTagIds([])
+          resetFolderForm()
         }}
         title="Nouveau dossier"
         description={
           folderId
             ? `Créé dans « ${currentFolder?.name ?? 'ce dossier'} ».`
-            : 'Créé à la racine de l’explorateur.'
+            : canCreateDeptFolder
+              ? pickDepartments
+                ? 'Dossier personnel, ou dossier public d’un département à choisir.'
+                : 'Dossier personnel, ou dossier public rattaché automatiquement à votre département.'
+              : 'Dossier personnel, visible de vous uniquement.'
         }
         footer={
           <>
@@ -508,8 +736,7 @@ export default function ExplorerPage() {
               variant="secondary"
               onClick={() => {
                 setShowFolderForm(false)
-                setFolderName('')
-                setFolderTagIds([])
+                resetFolderForm()
               }}
             >
               Annuler
@@ -529,6 +756,16 @@ export default function ExplorerPage() {
           className="space-y-3"
           onSubmit={(e) => {
             e.preventDefault()
+            if (!folderId && folderPublicDept && canCreateDeptFolder) {
+              if (pickDepartments && !folderDepartmentId) {
+                toast.error('Sélectionnez un département.')
+                return
+              }
+              if (!pickDepartments && !lockedDeptId) {
+                toast.error('Votre compte n’est rattaché à aucun département.')
+                return
+              }
+            }
             createFolder.mutate()
           }}
         >
@@ -543,6 +780,49 @@ export default function ExplorerPage() {
               autoFocus
             />
           </div>
+          {!folderId && canCreateDeptFolder ? (
+            <div className="space-y-2 rounded-lg border border-border p-3">
+              <label className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={folderPublicDept}
+                  onChange={(e) => setFolderPublicDept(e.target.checked)}
+                />
+                <span>
+                  Dossier public du département
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Visible de tous les membres du département, comme un espace de service.
+                  </span>
+                </span>
+              </label>
+              {folderPublicDept && pickDepartments ? (
+                <div>
+                  <Label htmlFor="folder-dept">Département</Label>
+                  <select
+                    id="folder-dept"
+                    className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm"
+                    value={folderDepartmentId}
+                    onChange={(e) => setFolderDepartmentId(e.target.value)}
+                    required
+                  >
+                    <option value="">Choisir…</option>
+                    {departmentOptions.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+              {folderPublicDept && !pickDepartments ? (
+                <p className="text-xs text-muted-foreground">
+                  Rattaché automatiquement à votre département
+                  {user?.department?.name ? ` (${user.department.name})` : ''}.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {canPickTags ? (
             <div>
               <Label>Tags (facultatif)</Label>
@@ -579,13 +859,10 @@ export default function ExplorerPage() {
         open={showDocForm}
         onClose={() => {
           setShowDocForm(false)
-          setDocTitle('')
-          setDocDescription('')
-          setDocFile(null)
-          setDocTagIds([])
+          resetDocForm()
         }}
         title="Nouveau document"
-        description={`Ajout dans « ${currentFolder?.name ?? 'le dossier courant'} ».`}
+        description={`Ajout dans « ${currentFolder?.name ?? 'le dossier courant'} ». Glissez un fichier ou choisissez-le, puis complétez les informations.`}
         size="lg"
         footer={
           <>
@@ -594,10 +871,7 @@ export default function ExplorerPage() {
               variant="secondary"
               onClick={() => {
                 setShowDocForm(false)
-                setDocTitle('')
-                setDocDescription('')
-                setDocFile(null)
-                setDocTagIds([])
+                resetDocForm()
               }}
             >
               Annuler
@@ -634,14 +908,40 @@ export default function ExplorerPage() {
           </div>
           <div>
             <Label htmlFor="doc-file">Fichier</Label>
-            <Input
-              id="doc-file"
-              className="mt-1"
-              type="file"
-              required
-              onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
-            />
+            <div
+              className={cn(
+                'mt-1 rounded-xl border-2 border-dashed px-4 py-7 text-center transition-colors',
+                docDropActive ? 'border-primary bg-primary/10' : 'border-primary/40 bg-primary/5',
+              )}
+              onDragOver={(e) => {
+                e.preventDefault()
+                setDocDropActive(true)
+              }}
+              onDragLeave={() => setDocDropActive(false)}
+              onDrop={(e) => {
+                const file = takeDroppedFile(e)
+                if (file) applyPickedFile(file)
+              }}
+            >
+              <Upload className="mx-auto mb-3 h-8 w-8 text-primary" />
+              <p className="text-sm font-medium">Glissez-déposez un fichier ici</p>
+              <p className="mt-1 text-xs text-muted-foreground">PDF, image, texte ou autre format</p>
+              <input
+                id="doc-file"
+                className="hidden"
+                type="file"
+                onChange={(e) => applyPickedFile(e.target.files?.[0] ?? null)}
+              />
+              <Button as="label" htmlFor="doc-file" size="lg" className="mt-4 cursor-pointer">
+                <Upload className="h-5 w-5" />
+                {docFile ? 'Changer de fichier' : 'Choisir un fichier'}
+              </Button>
+              {docFile ? (
+                <p className="mt-3 truncate text-xs text-muted-foreground">{docFile.name}</p>
+              ) : null}
+            </div>
           </div>
+          {docFile ? <LocalFilePreview file={docFile} /> : null}
           <div>
             <Label htmlFor="doc-desc">Description (facultatif)</Label>
             <Input
@@ -651,6 +951,26 @@ export default function ExplorerPage() {
               onChange={(e) => setDocDescription(e.target.value)}
               placeholder="Résumé ou contexte du fichier…"
             />
+          </div>
+          <div>
+            <Label htmlFor="doc-type">Type de document</Label>
+            <select
+              id="doc-type"
+              className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm"
+              value={docTypeId}
+              onChange={(e) => setDocTypeId(e.target.value)}
+            >
+              <option value="">— Aucun —</option>
+              {docTypes.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                  {t.requires_workflow ? ' · validation obligatoire' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Le type classe le document. S’il exige une validation, un circuit sera demandé.
+            </p>
           </div>
           {canPickTags ? (
             <div>
@@ -686,43 +1006,127 @@ export default function ExplorerPage() {
 
       <div className="grid gap-6 lg:grid-cols-[220px_1fr]">
         <aside className="rounded-xl border border-border bg-background p-3">
-          <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Arborescence
-          </h2>
-          <button
-            type="button"
-            onClick={() => openFolder(null)}
-            className={cn(
-              'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted',
-              folderId == null && 'bg-muted font-medium',
-            )}
-          >
-            Racine
-          </button>
-          <TreeNav
-            nodes={treeRoots}
-            activeId={folderId}
-            onOpen={openFolder}
-            depth={0}
-          />
+          {inProjectSpace ? (
+            <>
+              <button
+                type="button"
+                onClick={() => openFolder(null)}
+                className="mb-3 w-full rounded-lg px-2 py-1.5 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                ← Explorateur
+              </button>
+              <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Espace projet
+              </h2>
+              <TreeNav
+                nodes={treeRoots}
+                activeId={folderId}
+                onOpen={openFolder}
+                depth={0}
+              />
+            </>
+          ) : (
+            <>
+              <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Arborescence
+              </h2>
+              <button
+                type="button"
+                onClick={() => openFolder(null)}
+                className={cn(
+                  'mb-1 w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted',
+                  folderId == null && 'bg-muted font-medium',
+                )}
+              >
+                {rootLabel}
+              </button>
+              <TreeNav
+                nodes={treeRoots}
+                activeId={folderId}
+                onOpen={openFolder}
+                depth={0}
+              />
+              {projectSpaces.length ? (
+                <>
+                  <h2 className="mb-2 mt-4 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                    Espaces projet
+                  </h2>
+                  {projectSpaces.map((space) => (
+                    <button
+                      key={space.id}
+                      type="button"
+                      onClick={() => openFolder(space.id)}
+                      className="mb-0.5 flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{space.name}</span>
+                    </button>
+                  ))}
+                </>
+              ) : null}
+            </>
+          )}
         </aside>
 
-        <section className="rounded-xl border border-border bg-background">
+        <section
+          className={cn(
+            'relative rounded-xl border border-border bg-background',
+            explorerDropActive && 'ring-2 ring-primary/40',
+          )}
+          onDragOver={(e) => {
+            if (!canCreateDoc) return
+            e.preventDefault()
+            setExplorerDropActive(true)
+          }}
+          onDragLeave={(e) => {
+            if (e.currentTarget.contains(e.relatedTarget)) return
+            setExplorerDropActive(false)
+          }}
+          onDrop={(e) => {
+            const file = takeDroppedFile(e)
+            if (!file) return
+            if (!canCreateDoc) return
+            openCreateDoc(file)
+          }}
+        >
+          {explorerDropActive && canCreateDoc ? (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-primary/10 text-sm font-medium">
+              {folderId ? 'Déposez pour créer un document…' : 'Ouvrez un dossier avant de déposer un fichier'}
+            </div>
+          ) : null}
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <h2 className="text-sm font-semibold">
-              {folderId ? currentFolder?.name ?? 'Dossier' : 'Racine'}
+              {isSearching
+                ? 'Résultats'
+                : folderId
+                  ? currentFolder?.name ?? 'Dossier'
+                  : rootLabel}
             </h2>
-            <span className="text-xs text-muted-foreground">{items.length} élément(s)</span>
+            <span className="text-xs text-muted-foreground">
+              {searchQuery.isFetching && isSearching ? 'Recherche…' : `${items.length} élément(s)`}
+            </span>
           </div>
 
           {!items.length ? (
             <div className="p-4">
               <EmptyState
-                title={folderId ? 'Dossier vide' : 'Aucun dossier'}
+                title={
+                  isSearching
+                    ? 'Aucun résultat'
+                    : folderId
+                      ? 'Dossier vide'
+                      : 'Aucun dossier'
+                }
                 description={
-                  folderId
-                    ? 'Ajoutez un sous-dossier ou un document.'
-                    : 'Créez un dossier pour commencer.'
+                  isSearching
+                    ? 'Essayez un autre mot-clé ou retirez un filtre.'
+                    : folderId
+                      ? inProjectSpace
+                        ? 'Ajoutez ici les ressources associées au projet.'
+                        : 'Ajoutez un sous-dossier ou un document.'
+                      : globalSpaces
+                        ? 'Créez un dossier pour commencer. Les espaces projet s’ouvrent depuis Projets.'
+                        : 'Vous ne voyez que vos espaces. Créez un dossier personnel, ou ouvrez un projet dont vous êtes membre.'
                 }
               />
             </div>
@@ -835,6 +1239,18 @@ export default function ExplorerPage() {
           }
           onRename={() => runMenuAction(() => openRename(menu.item))}
           onMove={() => runMenuAction(() => openMove(menu.item))}
+          onShare={
+            menu.item.canShare
+              ? () =>
+                  runMenuAction(() =>
+                    setShareTarget({
+                      type: menu.item.type,
+                      id: menu.item.id,
+                      name: menu.item.name,
+                    }),
+                  )
+              : null
+          }
           onEdit={
             menu.item.type === 'document' && menu.item.isEditable && menu.item.status !== 'archive'
               ? () => runMenuAction(() => navigate(`/documents/${menu.item.id}?tab=content`))
@@ -931,6 +1347,24 @@ export default function ExplorerPage() {
           <p className="mt-2 text-xs text-muted-foreground">Aucun dossier disponible.</p>
         ) : null}
       </Modal>
+
+      <Modal
+        open={Boolean(shareTarget)}
+        onClose={() => setShareTarget(null)}
+        title={`Partager « ${shareTarget?.name ?? ''} »`}
+        description={
+          shareTarget?.type === 'folder'
+            ? 'Le destinataire verra ce dossier dans son explorateur, avec son contenu.'
+            : 'Le destinataire verra ce document dans son explorateur.'
+        }
+        size="lg"
+      >
+        {shareTarget?.type === 'folder' ? (
+          <DocumentAccessPanel folderId={shareTarget.id} embedded />
+        ) : shareTarget ? (
+          <DocumentAccessPanel documentId={shareTarget.id} embedded />
+        ) : null}
+      </Modal>
     </>
   )
 }
@@ -984,6 +1418,7 @@ function ItemContextMenu({
   onFavorite,
   onRename,
   onMove,
+  onShare,
   onEdit,
   onArchive,
   onDelete,
@@ -1002,6 +1437,7 @@ function ItemContextMenu({
       onClick: onFavorite,
     },
     onEdit ? { key: 'edit', label: 'Éditer', icon: Pencil, onClick: onEdit } : null,
+    onShare ? { key: 'share', label: 'Partager', icon: Share2, onClick: onShare } : null,
     canUpdate ? { key: 'rename', label: 'Renommer', icon: Type, onClick: onRename } : null,
     canUpdate ? { key: 'move', label: 'Déplacer', icon: FolderInput, onClick: onMove } : null,
     canArchive && onArchive

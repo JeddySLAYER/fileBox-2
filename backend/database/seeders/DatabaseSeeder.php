@@ -22,10 +22,13 @@ class DatabaseSeeder extends Seeder
                 'password' => 'password',
                 'must_change_password' => false,
                 'is_active' => true,
+                'department_id' => null,
             ]
         );
 
         $adminRole = Role::query()->where('slug', 'administrateur')->firstOrFail();
         $admin->roles()->sync([$adminRole->id]);
+
+        $this->call(DemoDataSeeder::class);
     }
 }

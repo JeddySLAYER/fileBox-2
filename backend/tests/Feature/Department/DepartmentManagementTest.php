@@ -111,6 +111,19 @@ test('créer un département avec responsable attribue le rôle', function () {
         ->and($manager->fresh()->department_id)->not->toBeNull();
 });
 
+test('un admin ne peut pas etre nomme responsable de departement', function () {
+    Sanctum::actingAs(adminUser());
+
+    $admin = adminUser();
+
+    $this->postJson('/api/departments', [
+        'name' => 'Pilotage',
+        'code' => 'PIL',
+        'manager_id' => $admin->id,
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors(['manager_id']);
+});
+
 test('un admin peut supprimer un département et réutiliser son code', function () {
     Sanctum::actingAs(adminUser());
     $department = Department::query()->create(['name' => 'Logistique', 'code' => 'LOG']);

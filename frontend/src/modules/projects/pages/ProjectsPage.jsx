@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Pencil, Plus, Trash2, UserPlus } from 'lucide-react'
+import { FolderOpen, Pencil, Plus, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { useConfirm } from '@/components/ConfirmDialog'
 import RequirePermission from '@/components/RequirePermission'
@@ -323,6 +323,21 @@ export default function ProjectsPage() {
       header: 'Membres',
       cell: (p) => p.members_count ?? 0,
     },
+    {
+      key: 'space',
+      header: 'Espace',
+      className: 'w-[1%] whitespace-nowrap',
+      cell: (p) => {
+        const folderId = p.root_folder_id ?? p.root_folder?.id
+        if (!folderId) return <span className="text-muted-foreground">—</span>
+        return (
+          <Button as={Link} to={`/explorer?folder=${folderId}`} variant="secondary" size="sm">
+            <FolderOpen className="h-4 w-4" />
+            Ouvrir
+          </Button>
+        )
+      },
+    },
     ...(canManage
       ? [
           {
@@ -370,8 +385,8 @@ export default function ProjectsPage() {
         title="Projets"
         description={
           canManage
-            ? 'Création et suivi des projets documentaires.'
-            : 'Projets auxquels vous participez.'
+            ? 'Chaque projet a un dossier dédié : ouvrez son espace pour y déposer les ressources.'
+            : 'Ouvrez l’espace d’un projet pour consulter et ajouter les ressources associées.'
         }
         actions={
           canManage ? (
@@ -406,7 +421,7 @@ export default function ProjectsPage() {
         open={showForm}
         onClose={closeForm}
         title={editingId ? 'Modifier le projet' : 'Nouveau projet'}
-        description="Un dossier projet dédié est créé automatiquement (hors explorateur racine)."
+        description="Un dossier dédié est créé automatiquement. Il n’apparaît pas à la racine de l’explorateur : ouvrez-le via le bouton Espace."
         size="lg"
         footer={
           <>

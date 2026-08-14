@@ -191,8 +191,7 @@ test('un utilisateur sans droit sur la ressource ne peut pas accorder un accès'
     $this->postJson("/api/documents/{$docId}/accesses", [
         'user_id' => $guest->id,
         'abilities' => ['view'],
-    ])->assertUnprocessable()
-        ->assertJsonPath('errors.accessible.0', 'Vous ne pouvez partager que les ressources sur lesquelles vous avez le droit de partage.');
+    ])->assertForbidden();
 });
 
 test('révocation automatique supprime les accès expirés', function () {
@@ -254,4 +253,87 @@ test('accès document autorise le contenu et les versions', function () {
     $this->getJson("/api/documents/{$docId}/versions")->assertOk();
     $this->getJson("/api/documents/{$docId}/content")->assertOk();
     $this->get("/api/documents/{$docId}/download")->assertOk();
+});
+
+test('un dossier partagé apparaît dans l explorateur du destinataire', function () {
+    $admin = adminUser();
+    $guest = collaboratorUser();
+    Sanctum::actingAs($admin);
+
+    $parent = Folder::query()->create(['name' => 'Parent privé', 'created_by' => $admin->id]);
+    $shared = Folder::query()->create([
+        'name' => 'Dossier partagé',
+        'parent_id' => $parent->id,
+        'created_by' => $admin->id,
+    ]);
+    $child = Folder::query()->create([
+        'name' => 'Sous-dossier',
+        'parent_id' => $shared->id,
+        'created_by' => $admin->id,
+    ]);
+
+    $this->postJson("/api/folders/{$shared->id}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view', 'download'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($guest);
+
+    $rootNames = collect($this->getJson('/api/folders')->assertOk()->json('data'))->pluck('name')->all();
+    expect($rootNames)->toContain('Dossier partagé')
+        ->and($rootNames)->not->toContain('Parent privé')
+        ->and($rootNames)->not->toContain('Sous-dossier');
+
+    $this->getJson("/api/folders/{$shared->id}")->assertOk();
+    $childNames = collect($this->getJson("/api/folders?parent_id={$shared->id}")->assertOk()->json('data'))
+        ->pluck('name')
+        ->all();
+    expect($childNames)->toContain('Sous-dossier');
+});
+
+test('un document partagé apparaît à la racine si le dossier n est pas visible', function () {
+    $admin = adminUser();
+    $guest = collaboratorUser();
+    Sanctum::actingAs($admin);
+
+    $folder = Folder::query()->create(['name' => 'Confidentiel', 'created_by' => $admin->id]);
+    $docId = $this->post('/api/documents', [
+        'title' => 'Note partagée',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('n.pdf', 8, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    $this->postJson("/api/documents/{$docId}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view', 'download'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($guest);
+
+    $this->getJson("/api/folders/{$folder->id}")->assertForbidden();
+    $titles = collect($this->getJson('/api/documents?explorer_root=1')->assertOk()->json('data'))
+        ->pluck('title')
+        ->all();
+    expect($titles)->toContain('Note partagée');
+});
+
+test('un collaborateur peut partager son propre document', function () {
+    $author = collaboratorUser();
+    $guest = collaboratorUser();
+    Sanctum::actingAs($author);
+
+    $folder = Folder::query()->create(['name' => 'Perso', 'created_by' => $author->id]);
+    $docId = $this->post('/api/documents', [
+        'title' => 'À partager',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('a.pdf', 8, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    $this->postJson("/api/documents/{$docId}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($guest);
+    $this->getJson("/api/documents/{$docId}")->assertOk();
 });

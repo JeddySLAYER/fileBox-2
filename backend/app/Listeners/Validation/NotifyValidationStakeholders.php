@@ -8,6 +8,7 @@ use App\Events\Validation\ValidationActionTaken;
 use App\Models\User;
 use App\Models\Validation;
 use App\Notifications\ValidationActionNotification;
+use App\Support\ValidationActors;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Notification;
 
@@ -20,13 +21,20 @@ class NotifyValidationStakeholders
         $action = $event->notificationAction;
 
         $ids = match ($action) {
-            'started' => $this->stepResponsibleIds($validation),
+            'started' => ValidationActors::stepResponsibleIds($validation)
+                ->merge(ValidationActors::authorOwnerIds($document, $event->excludeUserId)),
             'approved' => $this->afterApproveIds($document, $validation, $event->excludeUserId),
-            'rejected', 'correction_requested' => $this->authorOwnerIds($document, $event->excludeUserId),
-            default => $this->authorOwnerIds($document, $event->excludeUserId),
+            'rejected', 'correction_requested' => ValidationActors::authorOwnerIds($document, $event->excludeUserId)
+                ->merge(ValidationActors::projectManagerIds($document))
+                ->merge(ValidationActors::administratorIds()),
+            default => ValidationActors::authorOwnerIds($document, $event->excludeUserId),
         };
 
-        $ids = $ids->unique()->filter()->values();
+        $ids = $ids
+            ->unique()
+            ->filter()
+            ->when($event->excludeUserId, fn ($c) => $c->reject(fn ($id) => $id === $event->excludeUserId))
+            ->values();
 
         if ($ids->isEmpty()) {
             return;
@@ -44,50 +52,13 @@ class NotifyValidationStakeholders
     }
 
     /** @return Collection<int, int> */
-    private function authorOwnerIds($document, ?int $excludeUserId): Collection
-    {
-        return collect([$document->author_id, $document->owner_id])
-            ->filter()
-            ->unique()
-            ->when($excludeUserId, fn ($c) => $c->reject(fn ($id) => $id === $excludeUserId))
-            ->values();
-    }
-
-    /** @return Collection<int, int> */
-    private function stepResponsibleIds(Validation $validation): Collection
-    {
-        $step = $validation->workflowStep;
-        $ids = collect();
-
-        if ($step?->responsible_user_id) {
-            $ids->push($step->responsible_user_id);
-        }
-
-        if ($step?->responsible_role_id) {
-            $ids = $ids->merge(
-                User::query()
-                    ->whereHas('roles', fn ($q) => $q->where('roles.id', $step->responsible_role_id))
-                    ->pluck('id')
-            );
-        }
-
-        // Fallback : acteurs validations.act si aucune responsabilité ciblée
-        if ($ids->isEmpty()) {
-            $ids = User::query()
-                ->whereHas('roles.permissions', fn ($q) => $q->where('slug', 'validations.act'))
-                ->pluck('id');
-        }
-
-        return $ids->unique()->filter()->values();
-    }
-
-    /** @return Collection<int, int> */
     private function afterApproveIds($document, Validation $validation, ?int $excludeUserId): Collection
     {
         $document = $document->fresh();
 
         if ($document->status === DocumentStatus::Validated) {
-            return $this->authorOwnerIds($document, $excludeUserId);
+            return ValidationActors::authorOwnerIds($document, $excludeUserId)
+                ->merge(ValidationActors::projectManagerIds($document));
         }
 
         $next = Validation::query()
@@ -99,9 +70,9 @@ class NotifyValidationStakeholders
             ->first();
 
         if ($next) {
-            return $this->stepResponsibleIds($next);
+            return ValidationActors::stepResponsibleIds($next);
         }
 
-        return $this->authorOwnerIds($document, $excludeUserId);
+        return ValidationActors::authorOwnerIds($document, $excludeUserId);
     }
 }

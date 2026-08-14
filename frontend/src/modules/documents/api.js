@@ -35,10 +35,19 @@ export const documentsApi = {
   saveContent: (id, payload) => api.put(`/documents/${id}/content`, payload).then((r) => r.data),
   aiSummarize: (id) =>
     api.post(`/documents/${id}/ai/summarize`, null, { timeout: 120_000 }).then((r) => r.data),
-  aiAnalyze: (id) =>
-    api.post(`/documents/${id}/ai/analyze`, null, { timeout: 120_000 }).then((r) => r.data),
   aiOcr: (id) =>
     api.post(`/documents/${id}/ai/ocr`, null, { timeout: 120_000 }).then((r) => r.data),
+  saveOcrDocument: (id, payload = {}) =>
+    api.post(`/documents/${id}/ai/ocr/save`, payload).then((r) => r.data),
+  aiEnhance: (id) =>
+    api.post(`/documents/${id}/ai/enhance`, null, { timeout: 120_000 }).then((r) => r.data),
+  aiPreview: (formData) =>
+    api
+      .post('/documents/ai/preview', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120_000,
+      })
+      .then((r) => r.data),
   requestSignedPreview: (id, expiresMinutes = 15) =>
     api
       .get(`/documents/${id}/preview-url`, { params: { expires_minutes: expiresMinutes } })

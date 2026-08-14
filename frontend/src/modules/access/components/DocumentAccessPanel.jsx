@@ -13,7 +13,6 @@ import Modal from '@/components/ui/Modal'
 import { unwrapList, unwrapPaginated } from '@/lib/apiHelpers'
 import { getErrorMessage } from '@/lib/api'
 import { formatDate } from '@/lib/format'
-import { canAny } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { ACCESS_ABILITIES, accessesApi } from '@/modules/access/api'
 import { usersApi } from '@/modules/users/api'
@@ -26,39 +25,60 @@ const emptyForm = {
   search: '',
 }
 
-export default function DocumentAccessPanel({ documentId }) {
+export default function DocumentAccessPanel({
+  documentId,
+  folderId,
+  embedded = false,
+}) {
+  const type = folderId ? 'folder' : 'document'
+  const resourceId = folderId ?? documentId
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
   const confirm = useConfirm()
-  const [showForm, setShowForm] = useState(false)
+  const [showForm, setShowForm] = useState(embedded)
   const [form, setForm] = useState(emptyForm)
 
-  const canShare = canAny(user, ['documents.share', 'accesses.manage'])
+  const accessesKey =
+    type === 'folder' ? queryKeys.folderAccesses(resourceId) : queryKeys.documentAccesses(resourceId)
 
-  const { data, isLoading } = useQuery({
-    queryKey: queryKeys.documentAccesses(documentId),
-    queryFn: () => accessesApi.listForDocument(documentId),
-    enabled: canShare,
+  const { data, isLoading, isError } = useQuery({
+    queryKey: accessesKey,
+    queryFn: () =>
+      type === 'folder'
+        ? accessesApi.listForFolder(resourceId)
+        : accessesApi.listForDocument(resourceId),
+    enabled: Boolean(resourceId),
+    retry: false,
   })
 
   const usersQuery = useQuery({
     queryKey: queryKeys.users({ per_page: 200, is_active: '1' }),
     queryFn: () => usersApi.list({ per_page: 200, is_active: 1 }),
-    enabled: showForm && canShare,
+    enabled: showForm && Boolean(resourceId),
   })
 
+  function invalidateAccesses() {
+    queryClient.invalidateQueries({ queryKey: accessesKey })
+    queryClient.invalidateQueries({ queryKey: ['folders'] })
+    queryClient.invalidateQueries({ queryKey: ['documents'] })
+  }
+
   const grantAccess = useMutation({
-    mutationFn: () =>
-      accessesApi.grantDocument(documentId, {
+    mutationFn: () => {
+      const payload = {
         user_ids: form.user_ids.map(Number),
         abilities: form.abilities,
         ends_at: form.ends_at ? new Date(form.ends_at).toISOString() : null,
-      }),
+      }
+      return type === 'folder'
+        ? accessesApi.grantFolder(resourceId, payload)
+        : accessesApi.grantDocument(resourceId, payload)
+    },
     onSuccess: (res) => {
       toast.success(res.message)
-      setShowForm(false)
+      if (!embedded) setShowForm(false)
       setForm(emptyForm)
-      queryClient.invalidateQueries({ queryKey: queryKeys.documentAccesses(documentId) })
+      invalidateAccesses()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
@@ -67,7 +87,7 @@ export default function DocumentAccessPanel({ documentId }) {
     mutationFn: (accessId) => accessesApi.revoke(accessId),
     onSuccess: (res) => {
       toast.success(res.message)
-      queryClient.invalidateQueries({ queryKey: queryKeys.documentAccesses(documentId) })
+      invalidateAccesses()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
@@ -117,15 +137,169 @@ export default function DocumentAccessPanel({ documentId }) {
     setForm(emptyForm)
   }
 
-  if (!canShare) {
+  const grantForm = (
+    <form
+      id="share-resource-form"
+      className="space-y-4"
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (!form.user_ids.length) {
+          toast.error('Sélectionnez au moins un utilisateur.')
+          return
+        }
+        grantAccess.mutate()
+      }}
+    >
+      <div>
+        <Label htmlFor="share-search">Utilisateurs</Label>
+        <Input
+          id="share-search"
+          className="mt-1"
+          placeholder="Rechercher par nom ou e-mail…"
+          value={form.search}
+          onChange={(e) => setForm({ ...form, search: e.target.value })}
+        />
+        <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border">
+          {filteredUsers.map((u) => {
+            const checked = form.user_ids.includes(String(u.id))
+            const already = alreadyShared.has(Number(u.id))
+            return (
+              <label
+                key={u.id}
+                className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/40"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={checked}
+                  onChange={() => toggleUser(u.id)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{u.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{u.email}</span>
+                </span>
+                {already ? <Badge>Déjà partagé</Badge> : null}
+              </label>
+            )
+          })}
+          {!filteredUsers.length ? (
+            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
+              Aucun utilisateur trouvé.
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      <div>
+        <Label>Capacités</Label>
+        <div className="mt-2 flex flex-wrap gap-2">
+          {ACCESS_ABILITIES.map((a) => (
+            <label
+              key={a}
+              className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-xs"
+            >
+              <input
+                type="checkbox"
+                checked={form.abilities.includes(a)}
+                onChange={() => toggleAbility(a)}
+              />
+              {a}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <Label htmlFor="ends">Expire le (optionnel)</Label>
+        <Input
+          id="ends"
+          type="datetime-local"
+          value={form.ends_at}
+          onChange={(e) => setForm({ ...form, ends_at: e.target.value })}
+        />
+      </div>
+    </form>
+  )
+
+  const accessList =
+    accesses.length === 0 ? (
+      <EmptyState
+        title="Aucun accès spécifique"
+        description={
+          type === 'folder'
+            ? 'Partagez ce dossier : les sous-dossiers et documents seront visibles par le destinataire.'
+            : 'Partagez ce document avec un ou plusieurs utilisateurs.'
+        }
+      />
+    ) : (
+      <ul className="divide-y divide-border rounded-lg border border-border">
+        {accesses.map((access) => (
+          <li key={access.id} className="flex items-center justify-between gap-3 px-4 py-3">
+            <div>
+              <p className="text-sm font-medium">{access.user?.name}</p>
+              <p className="text-xs text-muted-foreground">{access.user?.email}</p>
+              <div className="mt-1 flex flex-wrap gap-1">
+                {(access.abilities ?? []).map((a) => (
+                  <Badge key={a}>{a}</Badge>
+                ))}
+                <Badge tone={access.is_active ? 'success' : 'danger'}>
+                  {access.is_active ? 'Actif' : 'Expiré'}
+                </Badge>
+              </div>
+              {access.ends_at ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Expire : {formatDate(access.ends_at, true)}
+                </p>
+              ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                const ok = await confirm({
+                  title: 'Révoquer l’accès',
+                  description:
+                    'Révoquer cet accès partagé ? L’utilisateur ne pourra plus consulter la ressource.',
+                  confirmLabel: 'Révoquer',
+                })
+                if (ok) revokeAccess.mutate(access.id)
+              }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </li>
+        ))}
+      </ul>
+    )
+
+  if (isError) {
     return (
       <p className="text-sm text-muted-foreground">
-        Vous n&apos;avez pas la permission de gérer les accès sur ce document.
+        Vous n&apos;avez pas la permission de gérer les accès sur cette ressource.
       </p>
     )
   }
 
   if (isLoading) return <LoadingScreen label="Accès…" />
+
+  if (embedded) {
+    return (
+      <div className="space-y-4">
+        {grantForm}
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            form="share-resource-form"
+            disabled={grantAccess.isPending || !form.user_ids.length || !form.abilities.length}
+          >
+            <Share2 className="h-4 w-4" />
+            Accorder ({form.user_ids.length})
+          </Button>
+        </div>
+        {accessList}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -139,7 +313,7 @@ export default function DocumentAccessPanel({ documentId }) {
       <Modal
         open={showForm}
         onClose={closeForm}
-        title="Partager le document"
+        title={type === 'folder' ? 'Partager le dossier' : 'Partager le document'}
         description="Sélectionnez un ou plusieurs utilisateurs et les capacités accordées."
         size="lg"
         footer={
@@ -149,7 +323,7 @@ export default function DocumentAccessPanel({ documentId }) {
             </Button>
             <Button
               type="submit"
-              form="share-doc-form"
+              form="share-resource-form"
               disabled={grantAccess.isPending || !form.user_ids.length || !form.abilities.length}
             >
               <Share2 className="h-4 w-4" />
@@ -158,134 +332,10 @@ export default function DocumentAccessPanel({ documentId }) {
           </>
         }
       >
-        <form
-          id="share-doc-form"
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (!form.user_ids.length) {
-              toast.error('Sélectionnez au moins un utilisateur.')
-              return
-            }
-            grantAccess.mutate()
-          }}
-        >
-          <div>
-            <Label htmlFor="share-search">Utilisateurs</Label>
-            <Input
-              id="share-search"
-              className="mt-1"
-              placeholder="Rechercher par nom ou e-mail…"
-              value={form.search}
-              onChange={(e) => setForm({ ...form, search: e.target.value })}
-            />
-            <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-border">
-              {filteredUsers.map((u) => {
-                const checked = form.user_ids.includes(String(u.id))
-                const already = alreadyShared.has(Number(u.id))
-                return (
-                  <label
-                    key={u.id}
-                    className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-2 last:border-b-0 hover:bg-muted/40"
-                  >
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={checked}
-                      onChange={() => toggleUser(u.id)}
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{u.name}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{u.email}</span>
-                    </span>
-                    {already ? <Badge>Déjà partagé</Badge> : null}
-                  </label>
-                )
-              })}
-              {!filteredUsers.length ? (
-                <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-                  Aucun utilisateur trouvé.
-                </p>
-              ) : null}
-            </div>
-          </div>
-
-          <div>
-            <Label>Capacités</Label>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {ACCESS_ABILITIES.map((a) => (
-                <label
-                  key={a}
-                  className="flex cursor-pointer items-center gap-1 rounded border border-border px-2 py-1 text-xs"
-                >
-                  <input
-                    type="checkbox"
-                    checked={form.abilities.includes(a)}
-                    onChange={() => toggleAbility(a)}
-                  />
-                  {a}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <Label htmlFor="ends">Expire le (optionnel)</Label>
-            <Input
-              id="ends"
-              type="datetime-local"
-              value={form.ends_at}
-              onChange={(e) => setForm({ ...form, ends_at: e.target.value })}
-            />
-          </div>
-        </form>
+        {grantForm}
       </Modal>
 
-      {accesses.length === 0 ? (
-        <EmptyState
-          title="Aucun accès spécifique"
-          description="Partagez ce document avec un ou plusieurs utilisateurs."
-        />
-      ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border">
-          {accesses.map((access) => (
-            <li key={access.id} className="flex items-center justify-between gap-3 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">{access.user?.name}</p>
-                <p className="text-xs text-muted-foreground">{access.user?.email}</p>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {(access.abilities ?? []).map((a) => (
-                    <Badge key={a}>{a}</Badge>
-                  ))}
-                  <Badge tone={access.is_active ? 'success' : 'danger'}>
-                    {access.is_active ? 'Actif' : 'Expiré'}
-                  </Badge>
-                </div>
-                {access.ends_at ? (
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Expire : {formatDate(access.ends_at, true)}
-                  </p>
-                ) : null}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={async () => {
-                  const ok = await confirm({
-                    title: 'Révoquer l’accès',
-                    description:
-                      'Révoquer cet accès partagé ? L’utilisateur ne pourra plus consulter la ressource.',
-                    confirmLabel: 'Révoquer',
-                  })
-                  if (ok) revokeAccess.mutate(access.id)
-                }}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {accessList}
     </div>
   )
 }

@@ -2,9 +2,11 @@
 
 namespace App\Services\DocumentType;
 
+use App\Models\Document;
 use App\Models\DocumentType;
 use App\Support\SoftDeleteArchive;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class DocumentTypeService
@@ -55,13 +57,16 @@ class DocumentTypeService
 
     public function delete(DocumentType $type): void
     {
-        SoftDeleteArchive::archive($type, ['slug']);
+        DB::transaction(function () use ($type) {
+            Document::query()->where('document_type_id', $type->id)->update(['document_type_id' => null]);
+            SoftDeleteArchive::archive($type, ['slug']);
+        });
     }
 
     /** @param  array<string, mixed>  $data */
     private function normalizeWorkflowFields(array $data, ?DocumentType $existing = null): array
     {
-        // ponytail: requires_workflow = hint only; no hard coupling to default_workflow_id
+        // requires_workflow impose un default_workflow_id (validé par la FormRequest).
         return $data;
     }
 }

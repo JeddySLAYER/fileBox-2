@@ -6,6 +6,7 @@ use App\Models\Document;
 use App\Models\Version;
 use App\Services\Storage\FileStorageService;
 use App\Support\DocumentEditability;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Validation\ValidationException;
 
@@ -14,6 +15,16 @@ class DocumentAiService
     /** @var list<string> */
     private const MULTIMODAL_MIMES = [
         'application/pdf',
+        'image/jpeg',
+        'image/jpg',
+        'image/png',
+        'image/gif',
+        'image/webp',
+        'image/bmp',
+    ];
+
+    /** @var list<string> */
+    private const IMAGE_MIMES = [
         'image/jpeg',
         'image/jpg',
         'image/png',
@@ -32,12 +43,16 @@ class DocumentAiService
         $version = $this->currentVersionOrFail($document);
         $parts = $this->buildParts(
             $version,
-            'Résume ce document en français de façon claire et structurée (titre implicite, points clés, conclusion courte). Ne invente rien.'
+            $this->briefInstruction(),
         );
 
-        $summary = $this->gemini->generate($parts, 'Tu es un assistant GED. Tu produis des résumés factuels pour archivage.');
+        $brief = $this->gemini->generate(
+            $parts,
+            'Tu es un assistant GED. Tu combines résumé et analyse en une seule fiche, sans inventer de faits.',
+        );
 
-        $document->summary = $summary;
+        $document->summary = $brief;
+        $document->ai_analysis = null;
         $document->ai_processed_at = Carbon::now();
         $document->save();
 
@@ -46,22 +61,10 @@ class DocumentAiService
 
     public function analyze(Document $document): Document
     {
-        $version = $this->currentVersionOrFail($document);
-        $parts = $this->buildParts(
-            $version,
-            'Analyse ce document en français : type probable, contenu visible, points importants, et explication utile pour un collaborateur qui découvre le fichier. Si le contenu est flou ou partiel, dis-le clairement.'
-        );
-
-        $analysis = $this->gemini->generate($parts, 'Tu es un assistant GED. Tu expliques les documents sans inventer de faits non visibles.');
-
-        $document->ai_analysis = $analysis;
-        $document->ai_processed_at = Carbon::now();
-        $document->save();
-
-        return $document->fresh(['currentVersion', 'folder', 'author', 'owner']);
+        return $this->summarize($document);
     }
 
-    public function ocr(Document $document): Document
+    public function ocr(Document $document): string
     {
         $version = $this->currentVersionOrFail($document);
 
@@ -79,21 +82,143 @@ class DocumentAiService
 
         $text = $this->gemini->generate($parts, 'Tu es un moteur OCR. Tu restitues uniquement le texte extrait.');
 
-        $version->ocr_text = $text;
-        $version->save();
+        $document->ai_processed_at = Carbon::now();
+        $document->save();
 
-        // Si pas encore de résumé, propose un résumé court du texte OCR
-        if (! $document->summary && mb_strlen($text) > 40) {
-            $document->summary = $this->gemini->generate(
-                [['text' => "Résume en français ce texte issu d'un OCR :\n\n".mb_substr($text, 0, 12000)]],
-                'Tu produis un résumé court pour fiche documentaire.',
-            );
+        return $text;
+    }
+
+    /**
+     * @return array{mime_type: string, binary: string, file_name: string}
+     */
+    public function enhance(Document $document): array
+    {
+        $version = $this->currentVersionOrFail($document);
+        if (! $this->supportsImage($version->mime_type, $version->extension)) {
+            throw ValidationException::withMessages([
+                'ai' => ['L’éclaircissement IA est disponible pour les images (PNG, JPEG, WebP…).'],
+            ]);
         }
+
+        $binary = $this->files->get($version->file_path);
+        if ($binary === null || $binary === '') {
+            throw ValidationException::withMessages([
+                'ai' => ['Impossible de lire le fichier.'],
+            ]);
+        }
+
+        $mime = $this->supportsImage($version->mime_type, null)
+            ? $version->mime_type
+            : $this->guessMime($version->extension);
+
+        $result = $this->enhanceBinary($binary, $mime);
 
         $document->ai_processed_at = Carbon::now();
         $document->save();
 
-        return $document->fresh(['currentVersion', 'folder', 'author', 'owner']);
+        $ext = $this->extensionFromMime($result['mime_type']);
+        $base = pathinfo((string) $version->file_name, PATHINFO_FILENAME) ?: 'image';
+
+        return [
+            'mime_type' => $result['mime_type'],
+            'binary' => $result['binary'],
+            'file_name' => $base.'-eclairci.'.$ext,
+        ];
+    }
+
+    public function ocrBinary(string $binary, string $mimeType): string
+    {
+        $this->assertBinarySize($binary);
+        if (! $this->supportsMultimodalMime($mimeType)) {
+            throw ValidationException::withMessages([
+                'ai' => ['L’OCR est disponible pour les PDF et images.'],
+            ]);
+        }
+
+        return $this->gemini->generate(
+            [
+                ['text' => 'Extrais tout le texte lisible de ce document (OCR). Conserve la structure (titres, listes, paragraphes) autant que possible. Si une zone est illisible, indique [illisible]. Réponds uniquement avec le texte extrait.'],
+                ['inline_data' => ['mime_type' => $mimeType, 'data' => base64_encode($binary)]],
+            ],
+            'Tu es un moteur OCR. Tu restitues uniquement le texte extrait.',
+        );
+    }
+
+    /**
+     * @return array{mime_type: string, binary: string}
+     */
+    public function enhanceBinary(string $binary, string $mimeType): array
+    {
+        $this->assertBinarySize($binary);
+        if (! $this->supportsImage($mimeType, null)) {
+            throw ValidationException::withMessages([
+                'ai' => ['L’éclaircissement IA est disponible pour les images.'],
+            ]);
+        }
+
+        return $this->gemini->generateImage(
+            [
+                ['text' => 'Améliore cette image de document scanné : éclaircis le fond, augmente le contraste du texte, réduis le bruit, les ombres et le voile. Ne modifie pas le contenu écrit, ne recadre pas de façon agressive. Produis une image nette, lisible, fond clair.'],
+                ['inline_data' => ['mime_type' => $mimeType, 'data' => base64_encode($binary)]],
+            ],
+            'Tu es un outil de restauration de scans. Tu renvoies une image éclaircie.',
+        );
+    }
+
+    public function analyzeBinary(string $binary, string $mimeType, ?string $fileName = null): string
+    {
+        $this->assertBinarySize($binary);
+
+        $ext = strtolower(pathinfo((string) $fileName, PATHINFO_EXTENSION));
+        $parts = [['text' => $this->briefInstruction()]];
+        $isText = DocumentEditability::fromExtension($ext)
+            || str_starts_with(strtolower($mimeType), 'text/');
+
+        if ($isText) {
+            if (trim($binary) === '') {
+                throw ValidationException::withMessages([
+                    'ai' => ['Le fichier texte est vide.'],
+                ]);
+            }
+            $parts[] = ['text' => "Contenu du document :\n\n".mb_substr($binary, 0, 100_000)];
+        } elseif ($this->supportsMultimodalMime($mimeType) || in_array($ext, ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true)) {
+            $parts[] = [
+                'inline_data' => [
+                    'mime_type' => $mimeType,
+                    'data' => base64_encode($binary),
+                ],
+            ];
+        } else {
+            throw ValidationException::withMessages([
+                'ai' => [
+                    'Ce format n’est pas analysable directement par Gemini. '
+                    .'Exportez en PDF ou image, ou utilisez un fichier texte (.txt, .md, .csv).',
+                ],
+            ]);
+        }
+
+        return $this->gemini->generate(
+            $parts,
+            'Tu es un assistant GED. Tu combines résumé et analyse en une seule fiche, sans inventer de faits.',
+        );
+    }
+
+    public function mimeFromUpload(UploadedFile $file): string
+    {
+        $ext = strtolower((string) $file->getClientOriginalExtension());
+        $fromExt = $this->guessMime($ext);
+        if ($fromExt !== 'application/octet-stream') {
+            return $fromExt;
+        }
+
+        $detected = strtolower((string) ($file->getMimeType() ?: $file->getClientMimeType()));
+        if ($detected !== '' && $detected !== 'application/octet-stream') {
+            return $detected;
+        }
+
+        throw ValidationException::withMessages([
+            'file' => ['Format de fichier non reconnu pour l’IA.'],
+        ]);
     }
 
     private function currentVersionOrFail(Document $document): Version
@@ -114,6 +239,16 @@ class DocumentAiService
         }
 
         return $version;
+    }
+
+    private function briefInstruction(): string
+    {
+        return "Produis une fiche en français, claire et factuelle, avec exactement ces sections :\n"
+            ."1) Résumé (5 à 8 lignes)\n"
+            ."2) Points clés (liste)\n"
+            ."3) Type / nature probable du document\n"
+            ."4) Ce qu’il faut retenir pour un collaborateur.\n"
+            .'N’invente rien. Si une information n’est pas visible, dis-le.';
     }
 
     /**
@@ -162,6 +297,8 @@ class DocumentAiService
         }
 
         $mime = $version->mime_type ?: $this->guessMime($version->extension);
+        $this->assertBinarySize($binary);
+
         $parts[] = [
             'inline_data' => [
                 'mime_type' => $mime,
@@ -172,16 +309,48 @@ class DocumentAiService
         return $parts;
     }
 
+    private function assertBinarySize(string $binary): void
+    {
+        $max = (int) config('services.gemini.max_bytes', 12_000_000);
+        if (strlen($binary) > $max) {
+            throw ValidationException::withMessages([
+                'ai' => ['Fichier trop volumineux pour l\'analyse IA (max ~'.round($max / 1_000_000).' Mo).'],
+            ]);
+        }
+    }
+
     private function supportsMultimodal(Version $version): bool
     {
-        $mime = strtolower((string) $version->mime_type);
-        if (in_array($mime, self::MULTIMODAL_MIMES, true)) {
-            return true;
+        return $this->supportsMultimodalMime($version->mime_type)
+            || in_array(strtolower((string) $version->extension), ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true);
+    }
+
+    private function supportsMultimodalMime(?string $mime): bool
+    {
+        $mime = strtolower((string) $mime);
+
+        return in_array($mime, self::MULTIMODAL_MIMES, true)
+            || str_starts_with($mime, 'image/');
+    }
+
+    public function supportsImage(?string $mimeType, ?string $extension): bool
+    {
+        $mime = strtolower((string) $mimeType);
+        if (in_array($mime, self::IMAGE_MIMES, true) || str_starts_with($mime, 'image/')) {
+            return $mime !== 'image/svg+xml';
         }
 
-        $ext = strtolower((string) $version->extension);
+        return in_array(strtolower((string) $extension), ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true);
+    }
 
-        return in_array($ext, ['pdf', 'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'], true);
+    public function extensionFromMime(string $mimeType): string
+    {
+        return match (strtolower($mimeType)) {
+            'image/jpeg', 'image/jpg' => 'jpg',
+            'image/webp' => 'webp',
+            'image/gif' => 'gif',
+            default => 'png',
+        };
     }
 
     private function guessMime(?string $extension): string

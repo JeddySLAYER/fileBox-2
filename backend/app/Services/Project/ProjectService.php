@@ -55,7 +55,10 @@ class ProjectService
             $query->where('status', $filters['status']);
         }
 
-        return $query->paginate($perPage);
+        $projects = $query->paginate($perPage);
+        $projects->getCollection()->each(fn (Project $project) => $this->ensureRootFolder($project));
+
+        return $projects;
     }
 
     /**
@@ -184,6 +187,54 @@ class ProjectService
     public function delete(Project $project): void
     {
         SoftDeleteArchive::archive($project, ['code']);
+    }
+
+    /**
+     * Garantit un dossier racine (espace projet), y compris pour les projets créés avant cette règle.
+     */
+    public function ensureRootFolder(Project $project): ?Folder
+    {
+        $folder = $project->root_folder_id
+            ? Folder::query()->find($project->root_folder_id)
+            : null;
+
+        if (! $folder) {
+            $folder = Folder::query()
+                ->where('project_id', $project->id)
+                ->whereNull('parent_id')
+                ->orderBy('id')
+                ->first();
+        }
+
+        if (! $folder) {
+            $createdBy = $project->created_by ?? $project->manager_id ?? auth()->id();
+            if (! $createdBy) {
+                return $project->rootFolder;
+            }
+
+            $folder = Folder::query()->create([
+                'name' => $project->name,
+                'parent_id' => null,
+                'project_id' => $project->id,
+                'department_id' => $project->department_id,
+                'created_by' => $createdBy,
+                'is_project_root' => true,
+            ]);
+        }
+
+        if (! $folder->is_project_root) {
+            $folder->is_project_root = true;
+            $folder->save();
+        }
+
+        if ((int) $project->root_folder_id !== (int) $folder->id) {
+            $project->root_folder_id = $folder->id;
+            $project->save();
+        }
+
+        $project->setRelation('rootFolder', $folder);
+
+        return $folder;
     }
 
     /**

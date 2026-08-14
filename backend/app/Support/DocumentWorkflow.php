@@ -26,12 +26,19 @@ class DocumentWorkflow
     }
 
     /**
-     * Projet public = éligible au workflow (jamais obligatoire : on peut sauter).
-     * requires_workflow sur le type = suggestion UI, pas une contrainte.
+     * Projet public = éligible au workflow.
+     * Le circuit ne démarre que si le document est proposé, sauf si le type exige une validation.
      */
     public static function subjectToWorkflow(Document $document): bool
     {
         return self::isProjectPublic($document);
+    }
+
+    public static function requiresWorkflow(Document $document): bool
+    {
+        $document->loadMissing('documentType');
+
+        return (bool) $document->documentType?->requires_workflow;
     }
 
     public static function recommendsWorkflow(Document $document): bool
@@ -42,7 +49,7 @@ class DocumentWorkflow
 
         $document->loadMissing('documentType');
 
-        return (bool) ($document->documentType?->requires_workflow || $document->documentType?->default_workflow_id);
+        return self::requiresWorkflow($document) || (bool) $document->documentType?->default_workflow_id;
     }
 
     /** @param  array{project_id?: int|null, confidentiality?: string|null}  $data */
@@ -72,12 +79,13 @@ class DocumentWorkflow
             return false;
         }
 
-        // Depuis "proposé" (chemin nominal) ou brouillon/rejeté (démarrage direct / skip propose)
-        return in_array($document->status, [
-            DocumentStatus::Proposed,
-            DocumentStatus::Draft,
-            DocumentStatus::Rejected,
-        ], true);
+        if ($document->status === DocumentStatus::Proposed) {
+            return true;
+        }
+
+        // Type qui exige une validation : un responsable peut démarrer sans passer par « proposé ».
+        return self::requiresWorkflow($document)
+            && in_array($document->status, [DocumentStatus::Draft, DocumentStatus::Rejected], true);
     }
 
     public static function resolveWorkflowId(?int $explicitWorkflowId, ?DocumentType $type): ?int

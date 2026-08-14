@@ -22,6 +22,7 @@ class VersionResource extends JsonResource
             'change_summary' => $this->change_summary,
             'is_locked' => (bool) $this->is_locked,
             'has_ocr' => filled($this->ocr_text),
+            'ocr_text' => $this->ocr_text,
             'creator' => $this->whenLoaded('creator', fn () => $this->creator ? [
                 'id' => $this->creator->id,
                 'name' => $this->creator->name,

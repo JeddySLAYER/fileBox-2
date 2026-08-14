@@ -11,6 +11,7 @@ use App\Http\Requests\Document\UpdateDocumentRequest;
 use App\Http\Resources\DocumentResource;
 use App\Http\Resources\VersionResource;
 use App\Models\Document;
+use App\Models\Folder;
 use App\Models\Version;
 use App\Services\Document\DocumentService;
 use App\Services\Storage\FileStorageService;
@@ -30,9 +31,19 @@ class DocumentController extends Controller
     {
         $this->authorize('viewAny', Document::class);
 
+        if ($request->filled('folder_id')) {
+            $folder = Folder::query()->findOrFail($request->integer('folder_id'));
+            $this->authorize('view', $folder);
+        }
+
+        $filters = $request->only(['search', 'folder_id', 'project_id', 'status', 'trashed', 'archived']);
+        if ($request->boolean('explorer_root')) {
+            $filters['explorer_root'] = true;
+        }
+
         $documents = $this->documentService->list(
             actor: $request->user(),
-            filters: $request->only(['search', 'folder_id', 'project_id', 'status', 'trashed']),
+            filters: $filters,
             perPage: (int) $request->integer('per_page', 15),
         );
 
@@ -135,7 +146,7 @@ class DocumentController extends Controller
         $document = $this->documentService->archive($document);
 
         return response()->json([
-            'message' => 'Document archivé.',
+            'message' => 'Document archivé. Il quitte l’explorateur et n’est plus modifiable.',
             'document' => new DocumentResource($document),
         ]);
     }

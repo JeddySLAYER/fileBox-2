@@ -107,6 +107,7 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
     // Documents
     Route::get('documents', [DocumentController::class, 'index']);
     Route::post('documents', [DocumentController::class, 'store']);
+    Route::post('documents/ai/preview', [DocumentAiController::class, 'preview']);
     Route::get('documents/{document}', [DocumentController::class, 'show']);
     Route::put('documents/{document}', [DocumentController::class, 'update']);
     Route::delete('documents/{document}', [DocumentController::class, 'destroy']);
@@ -127,10 +128,12 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
     Route::get('documents/{document}/versions/{version}/preview', [DocumentController::class, 'previewVersion']);
     Route::get('documents/{document}/preview-url', [DocumentController::class, 'previewUrl']);
 
-    // IA (Gemini) — résumé / analyse / OCR
+    // IA (Gemini) — résumé / OCR / éclaircissement
     Route::post('documents/{document}/ai/summarize', [DocumentAiController::class, 'summarize']);
     Route::post('documents/{document}/ai/analyze', [DocumentAiController::class, 'analyze']);
     Route::post('documents/{document}/ai/ocr', [DocumentAiController::class, 'ocr']);
+    Route::post('documents/{document}/ai/ocr/save', [DocumentAiController::class, 'saveOcr']);
+    Route::post('documents/{document}/ai/enhance', [DocumentAiController::class, 'enhance']);
 
     // Commentaires (liés au document — RG-DOC-015)
     Route::get('documents/{document}/comments', [CommentController::class, 'index']);
@@ -146,6 +149,7 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
     Route::delete('workflows/{workflow}', [WorkflowController::class, 'destroy']);
 
     // Validations
+    Route::get('validations/inbox', [ValidationController::class, 'inbox']);
     Route::get('documents/{document}/validations', [ValidationController::class, 'index']);
     Route::post('documents/{document}/workflow/start', [ValidationController::class, 'start']);
     Route::post('documents/{document}/workflow/restart', [ValidationController::class, 'restart']);

@@ -77,6 +77,15 @@ test('un document archivé ne peut plus être modifié', function () {
         ->assertOk()
         ->assertJsonPath('document.status', DocumentStatus::Archived->value);
 
+    $listed = $this->getJson("/api/documents?folder_id={$folder->id}")
+        ->assertOk()
+        ->json('data');
+    expect(collect($listed)->pluck('id'))->not->toContain($id);
+
+    $this->getJson('/api/documents?archived=1')
+        ->assertOk()
+        ->assertJsonPath('data.0.id', $id);
+
     $this->putJson("/api/documents/{$id}", [
         'title' => 'Nouveau titre',
     ])->assertUnprocessable();

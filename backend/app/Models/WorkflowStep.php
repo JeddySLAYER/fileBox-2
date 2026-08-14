@@ -14,6 +14,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
     'responsible_role_id',
     'responsible_user_id',
     'is_mandatory',
+    'duration_hours',
+    'reminder_hours_before',
+    'remind_on_overdue',
     'description',
 ])]
 class WorkflowStep extends Model
@@ -22,6 +25,9 @@ class WorkflowStep extends Model
     {
         return [
             'is_mandatory' => 'boolean',
+            'remind_on_overdue' => 'boolean',
+            'duration_hours' => 'integer',
+            'reminder_hours_before' => 'integer',
         ];
     }
 

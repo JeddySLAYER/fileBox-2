@@ -1,6 +1,7 @@
 <?php
 
 use App\Services\Access\AccessService;
+use App\Services\Validation\ValidationReminderService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -19,6 +20,11 @@ Artisan::command('notifications:access-deadlines', function (AccessService $acce
     $this->info("Rappels d'expiration envoyés: {$count}");
 })->purpose('Notify users whose temporary access expires within 24 hours');
 
+Artisan::command('notifications:validation-reminders', function (ValidationReminderService $reminders) {
+    $count = $reminders->sendDueReminders();
+    $this->info("Rappels de validation envoyés: {$count}");
+})->purpose('Remind validators when a step is approaching or past its deadline');
+
 Artisan::command('projects:sync-members', function (\App\Services\Project\ProjectService $projects) {
     $count = $projects->syncAllMandatoryMembers();
     $this->info("Projets resynchronisés (créateurs + responsables): {$count}");
@@ -27,11 +33,12 @@ Artisan::command('projects:sync-members', function (\App\Services\Project\Projec
 Artisan::command('users:clear-invite-departments', function () {
     $count = \App\Models\User::query()
         ->whereNotNull('department_id')
-        ->whereHas('roles', fn ($q) => $q->where('slug', 'invite'))
+        ->whereHas('roles', fn ($q) => $q->whereIn('slug', \App\Models\User::ROLES_WITHOUT_DEPARTMENT))
         ->update(['department_id' => null]);
 
-    $this->info("Invités détachés de leur département: {$count}");
-})->purpose('Retire le département de tous les comptes invités');
+    $this->info("Comptes transverses détachés de leur département: {$count}");
+})->purpose('Retire le département des comptes admin, direction, chef de projet et invité');
 
 Schedule::command('accesses:revoke-expired')->everyMinute();
 Schedule::command('notifications:access-deadlines')->hourly();
+Schedule::command('notifications:validation-reminders')->everyFifteenMinutes();

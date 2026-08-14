@@ -8,7 +8,7 @@ use App\Events\Folder\FolderCreated;
 use App\Events\Folder\FolderDeleted;
 use App\Models\Folder;
 use App\Models\User;
-use App\Services\Access\AccessService;
+use App\Services\Access\SpaceVisibility;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -16,30 +16,34 @@ use Illuminate\Validation\ValidationException;
 class FolderService
 {
     public function __construct(
-        private readonly AccessService $accessService,
+        private readonly SpaceVisibility $spaceVisibility,
     ) {}
 
     /**
-     * @param  array{parent_id?: int|null, project_id?: int|null, department_id?: int|null, trashed?: bool}  $filters
+     * @param  array{parent_id?: int|null, project_id?: int|null, department_id?: int|null, trashed?: bool, project_roots?: bool}  $filters
      */
     public function list(User $actor, array $filters = []): Collection
     {
-        $scoped = ! $actor->hasPermission('folders.view');
-
         $query = Folder::query()
             ->with(['creator', 'project', 'department', 'tags'])
-            ->withCount(['children', 'documents'])
+            ->withCount([
+                'children',
+                'documents' => fn ($q) => $q->where('status', '!=', DocumentStatus::Archived),
+            ])
             ->orderBy('name');
 
         if (! empty($filters['trashed'])) {
             $query->onlyTrashed();
         }
 
-        if (array_key_exists('parent_id', $filters)) {
+        $this->spaceVisibility->applyFolderScope($query, $actor);
+
+        if (! empty($filters['project_roots'])) {
+            $query->where('is_project_root', true);
+        } elseif (array_key_exists('parent_id', $filters)) {
             $query->where('parent_id', $filters['parent_id']);
-        } elseif (empty($filters['trashed']) && ! $scoped) {
-            $query->whereNull('parent_id')
-                ->where('is_project_root', false);
+        } elseif (empty($filters['trashed'])) {
+            $this->spaceVisibility->restrictToExplorerRoots($query, $actor);
         }
 
         if (! empty($filters['project_id'])) {
@@ -48,11 +52,6 @@ class FolderService
 
         if (! empty($filters['department_id'])) {
             $query->where('department_id', $filters['department_id']);
-        }
-
-        if ($scoped) {
-            $ids = $this->accessService->accessibleFolderIds($actor);
-            $query->whereIn('id', $ids ?: [0]);
         }
 
         return $query
@@ -64,29 +63,43 @@ class FolderService
 
     public function tree(User $actor, ?int $projectId = null, ?int $departmentId = null): Collection
     {
-        if (! $actor->hasPermission('folders.view')) {
-            // ponytail: flat list for access-only users; upgrade: build subtree from accessible roots
-            return $this->list($actor, array_filter([
-                'project_id' => $projectId,
-                'department_id' => $departmentId,
-            ], fn ($v) => $v !== null));
-        }
+        $constrain = function ($q) use ($actor): void {
+            $this->spaceVisibility->applyFolderScope($q, $actor);
+            $q->orderBy('name');
+        };
 
         $query = Folder::query()
             ->with([
-                'children' => fn ($q) => $q->orderBy('name')->with([
-                    'children' => fn ($q2) => $q2->orderBy('name')->with([
-                        'children' => fn ($q3) => $q3->orderBy('name'),
-                    ]),
-                ]),
+                'children' => function ($q) use ($constrain) {
+                    $constrain($q);
+                    $q->with([
+                        'children' => function ($q2) use ($constrain) {
+                            $constrain($q2);
+                            $q2->with([
+                                'children' => function ($q3) use ($constrain) {
+                                    $constrain($q3);
+                                },
+                            ]);
+                        },
+                    ]);
+                },
             ])
-            ->withCount(['children', 'documents'])
-            ->whereNull('parent_id')
-            ->where('is_project_root', false)
+            ->withCount([
+                'children',
+                'documents' => fn ($q) => $q->where('status', '!=', DocumentStatus::Archived),
+            ])
             ->orderBy('name');
 
+        $this->spaceVisibility->applyFolderScope($query, $actor);
+
         if ($projectId) {
-            $query->where('project_id', $projectId);
+            $query->where('project_id', $projectId)
+                ->where(function ($q) {
+                    $q->where('is_project_root', true)
+                        ->orWhereNull('parent_id');
+                });
+        } else {
+            $this->spaceVisibility->restrictToExplorerRoots($query, $actor);
         }
 
         if ($departmentId) {
@@ -103,8 +116,16 @@ class FolderService
     {
         if (! empty($data['parent_id'])) {
             $parent = Folder::query()->findOrFail($data['parent_id']);
-            $data['project_id'] ??= $parent->project_id;
-            $data['department_id'] ??= $parent->department_id;
+            abort_unless($this->spaceVisibility->canViewFolder($actor, $parent), 403);
+            $data['project_id'] = $parent->project_id;
+            $data['department_id'] = $parent->department_id;
+        } else {
+            $data['project_id'] = null;
+            if (! empty($data['department_id'])) {
+                $this->assertCanCreateDepartmentPublicFolder($actor, (int) $data['department_id']);
+            } else {
+                $data['department_id'] = null;
+            }
         }
 
         $folder = Folder::query()->create([
@@ -223,6 +244,29 @@ class FolderService
                 ]);
             }
             $current = $current->parent;
+        }
+    }
+
+    private function assertCanCreateDepartmentPublicFolder(User $actor, int $departmentId): void
+    {
+        if (! $actor->hasPermission('projects.manage')) {
+            throw ValidationException::withMessages([
+                'department_id' => ['Seuls les profils autorisés à créer un projet peuvent créer un dossier public de département.'],
+            ]);
+        }
+
+        if ($actor->isDepartmentScopedProjectManager()) {
+            if (! $actor->department_id) {
+                throw ValidationException::withMessages([
+                    'department_id' => ['Votre compte n’est rattaché à aucun département.'],
+                ]);
+            }
+
+            if ((int) $actor->department_id !== $departmentId) {
+                throw ValidationException::withMessages([
+                    'department_id' => ['Vous ne pouvez créer un dossier public que pour votre département.'],
+                ]);
+            }
         }
     }
 }

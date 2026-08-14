@@ -2,16 +2,17 @@
 
 namespace App\Services\Search;
 
+use App\Enums\DocumentStatus;
 use App\Models\Document;
 use App\Models\Folder;
 use App\Models\User;
-use App\Services\Access\AccessService;
+use App\Services\Access\SpaceVisibility;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 
 class SearchService
 {
     public function __construct(
-        private readonly AccessService $accessService,
+        private readonly SpaceVisibility $spaceVisibility,
     ) {}
 
     /**
@@ -59,6 +60,8 @@ class SearchService
 
         if (! empty($filters['status'])) {
             $query->where('status', $filters['status']);
+        } else {
+            $query->where('status', '!=', DocumentStatus::Archived);
         }
 
         if (! empty($filters['folder_id'])) {
@@ -99,10 +102,7 @@ class SearchService
             $query->whereHas('tags', fn ($t) => $t->whereIn('tags.id', $filters['tag_ids']));
         }
 
-        if (! $actor->hasPermission('documents.view')) {
-            $accessibleIds = $this->accessService->accessibleDocumentIds($actor);
-            $query->whereIn('id', $accessibleIds ?: [0]);
-        }
+        $this->spaceVisibility->applyDocumentScope($query, $actor);
 
         return $query->paginate($perPage);
     }
@@ -131,10 +131,7 @@ class SearchService
             $query->where('department_id', $filters['department_id']);
         }
 
-        if (! $actor->hasPermission('folders.view')) {
-            $ids = $this->accessService->accessibleFolderIds($actor);
-            $query->whereIn('id', $ids ?: [0]);
-        }
+        $this->spaceVisibility->applyFolderScope($query, $actor);
 
         return $query->limit(50)->get();
     }

@@ -23,15 +23,22 @@ class FolderController extends Controller
     {
         $this->authorize('viewAny', Folder::class);
 
-        $folders = $this->folderService->list(
-            $request->user(),
-            $request->only([
-                'parent_id',
-                'project_id',
-                'department_id',
-                'trashed',
-            ])
-        );
+        if ($request->filled('parent_id')) {
+            $parent = Folder::query()->findOrFail($request->integer('parent_id'));
+            $this->authorize('view', $parent);
+        }
+
+        $filters = $request->only([
+            'parent_id',
+            'project_id',
+            'department_id',
+            'trashed',
+        ]);
+        if ($request->boolean('project_roots')) {
+            $filters['project_roots'] = true;
+        }
+
+        $folders = $this->folderService->list($request->user(), $filters);
 
         return FolderResource::collection($folders);
     }

@@ -20,10 +20,14 @@ test('un admin peut lister les utilisateurs', function () {
         ->assertJsonStructure(['data', 'links', 'meta']);
 });
 
-test('un collaborateur ne peut pas lister les utilisateurs', function () {
+test('un collaborateur peut lister les utilisateurs pour partager', function () {
     Sanctum::actingAs(collaboratorUser());
 
-    $this->getJson('/api/users')->assertForbidden();
+    $this->getJson('/api/users')->assertOk()->assertJsonStructure(['data']);
+    $this->postJson('/api/users', [
+        'name' => 'Intrus',
+        'email' => 'intrus@filebox.test',
+    ])->assertForbidden();
 });
 
 test('un admin peut créer un utilisateur avec mot de passe temporaire', function () {

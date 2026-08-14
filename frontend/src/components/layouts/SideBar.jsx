@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom'
 import {
   Activity,
   Archive,
+  ArchiveRestore,
   Building2,
   ClipboardList,
   FileType,
@@ -10,10 +11,11 @@ import {
   GitBranch,
   LayoutDashboard,
   LogOut,
-  Search,
   Settings,
   Share2,
   Shield,
+  Sparkles,
+  Star,
   Tags,
   Trash2,
   Users,
@@ -30,7 +32,8 @@ const NAV = [
     items: [
       { to: '/dashboard', label: 'Accueil', icon: LayoutDashboard, always: true },
       { to: '/explorer', label: 'Explorateur', icon: FolderOpen, always: true },
-      { to: '/search', label: 'Recherche', icon: Search, always: true },
+      { to: '/ia', label: 'Outils IA', icon: Sparkles, always: true },
+      { to: '/favorites', label: 'Favoris', icon: Star, always: true },
     ],
   },
   {
@@ -47,10 +50,10 @@ const NAV = [
     items: [
       { to: '/workflows', label: 'Workflows', icon: GitBranch, permission: 'workflows.manage' },
       {
-        to: '/proposed',
-        label: 'Proposés',
+        to: '/validations',
+        label: 'Validations',
         icon: ClipboardList,
-        anyOf: ['workflows.manage', 'projects.manage'],
+        always: true,
       },
       { to: '/document-types', label: 'Types docs', icon: FileType, permission: 'document_types.manage' },
       { to: '/tags', label: 'Tags', icon: Tags, permission: 'tags.manage' },
@@ -60,6 +63,7 @@ const NAV = [
     label: 'Système',
     items: [
       { to: '/shared', label: 'Mes partages', icon: Share2, always: true },
+      { to: '/archives', label: 'Archives', icon: ArchiveRestore, always: true },
       { to: '/trash', label: 'Corbeille', icon: Trash2, always: true },
       { to: '/settings', label: 'Paramètres', icon: Settings, permission: 'settings.manage' },
       { to: '/backups', label: 'Sauvegardes', icon: Archive, permission: 'settings.manage' },

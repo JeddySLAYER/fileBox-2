@@ -22,6 +22,15 @@ class ValidationController extends Controller
         private readonly ValidationService $validationService,
     ) {}
 
+    public function inbox(): AnonymousResourceCollection
+    {
+        $this->authorize('viewAny', Validation::class);
+
+        return ValidationResource::collection(
+            $this->validationService->inbox(request()->user())
+        );
+    }
+
     public function index(Document $document): AnonymousResourceCollection
     {
         $this->authorize('view', $document);
