@@ -335,14 +335,16 @@ export default function DashboardPage() {
   const stats = [
     { label: 'Documents', value: data.counts.documents, icon: FileText },
     { label: 'Archivés', value: data.counts.documents_archived ?? 0, icon: Archive },
-    { label: 'Utilisateurs', value: data.counts.users_active, icon: Users },
+    data.scope?.mode !== 'department'
+      ? { label: 'Utilisateurs', value: data.counts.users_active, icon: Users }
+      : null,
     { label: 'Validations', value: data.counts.validations_pending, icon: GitPullRequest },
     {
       label: 'En retard',
       value: data.counts.validations_blocked ?? 0,
       icon: AlertTriangle,
     },
-  ]
+  ].filter(Boolean)
 
   return (
     <>
@@ -351,8 +353,11 @@ export default function DashboardPage() {
         description={data.scope?.label ?? "Vue d'ensemble de l'activité documentaire."}
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        {stats.map((stat) => {
+      <div
+        className={`grid gap-4 sm:grid-cols-2 ${
+          stats.length >= 5 ? 'xl:grid-cols-5' : 'xl:grid-cols-4'
+        }`}
+      >        {stats.map((stat) => {
           const Icon = stat.icon
           return (
             <Card key={stat.label} className="flex items-start justify-between">

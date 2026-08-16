@@ -161,7 +161,7 @@ export default function AiToolsPage() {
   return (
     <>
       <PageHeader
-        title="Outils IA"
+        title="Traitement"
         description="Analysez, extrayez le texte ou éclaircissez un fichier sans l’enregistrer. Le résultat s’affiche ici à la fin du traitement."
       />
 

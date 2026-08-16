@@ -27,7 +27,6 @@ function statusTone(status) {
 }
 
 function canActOnStep(user, validation) {
-  if (canAny(user, ['validations.act', 'workflows.manage'])) return true
   const step = validation?.workflow_step
   if (!step || !user) return false
   if (step.responsible_user?.id === user.id) return true
@@ -50,6 +49,7 @@ export default function DocumentValidationsPanel({
   subjectToWorkflow = false,
   recommendsWorkflow = false,
   canPropose = false,
+  canAcceptProposition = false,
   requiresWorkflow = false,
   canStartWorkflow = false,
   onUpdated,
@@ -85,6 +85,8 @@ export default function DocumentValidationsPanel({
     validations.length === 0 &&
     documentStatus !== 'en_validation'
 
+  const showAccept = canStart && canAcceptProposition && documentStatus === 'propose'
+
   const selectedWorkflowQuery = useQuery({
     queryKey: queryKeys.workflow(effectiveWfId),
     queryFn: () => workflowsApi.get(effectiveWfId),
@@ -114,6 +116,15 @@ export default function DocumentValidationsPanel({
 
   const proposeDocument = useMutation({
     mutationFn: () => documentsApi.propose(documentId),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidate()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const acceptProposition = useMutation({
+    mutationFn: () => documentsApi.acceptProposition(documentId),
     onSuccess: (res) => {
       toast.success(res.message)
       invalidate()
@@ -203,16 +214,34 @@ export default function DocumentValidationsPanel({
       {subjectToWorkflow && documentStatus === 'brouillon' ? (
         <p className="mb-4 text-sm text-muted-foreground">
           {requiresWorkflow
-            ? 'Ce type exige un circuit de validation : proposez le document, ou un responsable peut démarrer le workflow directement.'
-            : 'Pour lancer un circuit, proposez d’abord le document. Un responsable démarrera ensuite le workflow.'}
+            ? 'Ce type exige un circuit : le workflow par défaut démarre automatiquement au dépôt.'
+            : 'Les collaborateurs proposent automatiquement leurs dépôts. Un responsable peut accepter sans circuit ou assigner un workflow.'}
           {recommendsWorkflow && !requiresWorkflow ? ' Un workflow est recommandé pour ce type.' : ''}
+        </p>
+      ) : null}
+
+      {subjectToWorkflow && documentStatus === 'en_validation' ? (
+        <p className="mb-4 text-sm text-muted-foreground">
+          {canAct
+            ? 'C’est votre étape : approuvez, demandez une correction ou rejetez.'
+            : 'Suivi du circuit : seules les personnes assignées à l’étape courante peuvent valider.'}
+        </p>
+      ) : null}
+
+      {subjectToWorkflow && documentStatus === 'propose' ? (
+        <p className="mb-4 text-sm text-muted-foreground">
+          {canAny(user, ['workflows.manage', 'validations.act', 'projects.manage'])
+            ? 'Proposition en attente : validez-la ou assignez un workflow. Ensuite vous suivez l’évolution ici ; seuls les assignés d’étape valident.'
+            : 'Votre document est proposé. Vous pourrez suivre ici chaque étape du circuit une fois démarré.'}
         </p>
       ) : null}
 
       {showPropose ? (
         <div className="mb-4 rounded-lg border border-dashed border-border p-4">
           <p className="text-sm text-muted-foreground">
-            Proposez le document pour qu&apos;un responsable démarre le workflow de validation.
+            {documentStatus === 'rejete'
+              ? 'Après un rejet, déposez une nouvelle version puis reproposez le document pour relancer le circuit.'
+              : 'Proposez le document pour qu&apos;un responsable l&apos;accepte ou démarre un workflow.'}
           </p>
           <Button
             className="mt-3"
@@ -221,7 +250,25 @@ export default function DocumentValidationsPanel({
             onClick={() => proposeDocument.mutate()}
           >
             <Send className="h-4 w-4" />
-            Proposer à validation
+            {documentStatus === 'rejete' ? 'Reproposer à validation' : 'Proposer à validation'}
+          </Button>
+        </div>
+      ) : null}
+
+      {showAccept ? (
+        <div className="mb-4 rounded-lg border border-dashed border-border p-4">
+          <p className="text-sm text-muted-foreground">
+            Accepter sans circuit de validation, ou assigner un workflow ci-dessous.
+          </p>
+          <Button
+            className="mt-3"
+            size="sm"
+            variant="secondary"
+            disabled={acceptProposition.isPending}
+            onClick={() => acceptProposition.mutate()}
+          >
+            <Check className="h-4 w-4" />
+            Valider la proposition
           </Button>
         </div>
       ) : null}
@@ -229,7 +276,7 @@ export default function DocumentValidationsPanel({
       {showStart ? (
         <div className="mb-4 space-y-3 rounded-lg border border-dashed border-border p-4">
           <div>
-            <Label htmlFor="wf">Démarrer le workflow</Label>
+            <Label htmlFor="wf">Assigner un workflow</Label>
             <div className="mt-2 flex flex-wrap gap-2">
               <select
                 id="wf"
@@ -318,7 +365,7 @@ export default function DocumentValidationsPanel({
             onClick={() => startWorkflow.mutate()}
           >
             <Play className="h-4 w-4" />
-            Démarrer
+            Lancer le circuit
           </Button>
         </div>
       ) : null}
@@ -343,7 +390,9 @@ export default function DocumentValidationsPanel({
             subjectToWorkflow
               ? requiresWorkflow
                 ? 'Ce type exige une validation. Proposez le document ou démarrez le workflow.'
-                : 'Proposez le document pour qu’un responsable démarre le workflow.'
+                : canAny(user, ['workflows.manage', 'validations.act'])
+                  ? 'Proposez le document pour qu’un responsable démarre le workflow.'
+                  : 'Aucune étape ne vous est assignée pour le moment.'
               : 'Ce document n’est pas soumis à un circuit de validation.'
           }
         />

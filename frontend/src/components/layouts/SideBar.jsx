@@ -11,13 +11,13 @@ import {
   GitBranch,
   LayoutDashboard,
   LogOut,
-  Settings,
   Share2,
   Shield,
   Sparkles,
   Star,
   Tags,
   Trash2,
+  UserCircle,
   Users,
 } from 'lucide-react'
 import BrandMark from '@/components/BrandMark'
@@ -32,7 +32,7 @@ const NAV = [
     items: [
       { to: '/dashboard', label: 'Accueil', icon: LayoutDashboard, always: true },
       { to: '/explorer', label: 'Explorateur', icon: FolderOpen, always: true },
-      { to: '/ia', label: 'Outils IA', icon: Sparkles, always: true },
+      { to: '/ia', label: 'Traitement', icon: Sparkles, always: true },
       { to: '/favorites', label: 'Favoris', icon: Star, always: true },
     ],
   },
@@ -65,7 +65,7 @@ const NAV = [
       { to: '/shared', label: 'Mes partages', icon: Share2, always: true },
       { to: '/archives', label: 'Archives', icon: ArchiveRestore, always: true },
       { to: '/trash', label: 'Corbeille', icon: Trash2, always: true },
-      { to: '/settings', label: 'Paramètres', icon: Settings, permission: 'settings.manage' },
+      { to: '/profile', label: 'Profil', icon: UserCircle, always: true },
       { to: '/backups', label: 'Sauvegardes', icon: Archive, permission: 'settings.manage' },
       {
         to: '/activity',

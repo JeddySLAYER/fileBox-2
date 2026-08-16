@@ -364,8 +364,9 @@ export default function ProjectsPage() {
                   onClick={async () => {
                     const ok = await confirm({
                       title: 'Supprimer le projet',
-                      description: `Supprimer « ${p.name} » ?`,
+                      description: `Supprimer « ${p.name} » ? L’espace dédié et tout son contenu (dossiers et documents) seront placés dans la corbeille.`,
                       confirmLabel: 'Supprimer',
+                      tone: 'danger',
                     })
                     if (ok) removeProject.mutate(p.id)
                   }}

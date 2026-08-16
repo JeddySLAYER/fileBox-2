@@ -14,9 +14,11 @@ export const documentsApi = {
     api.put(`/documents/${id}/move`, { folder_id: folderId }).then((r) => r.data),
   remove: (id) => api.delete(`/documents/${id}`).then((r) => r.data),
   restore: (id) => api.post(`/documents/${id}/restore`).then((r) => r.data),
+  forceRemove: (id) => api.delete(`/documents/${id}/permanent`).then((r) => r.data),
   archive: (id) => api.post(`/documents/${id}/archive`).then((r) => r.data),
   unarchive: (id) => api.post(`/documents/${id}/unarchive`).then((r) => r.data),
   propose: (id) => api.post(`/documents/${id}/propose`).then((r) => r.data),
+  acceptProposition: (id) => api.post(`/documents/${id}/accept`).then((r) => r.data),
   publish: (id) => api.post(`/documents/${id}/publish`).then((r) => r.data),
   versions: (id) => api.get(`/documents/${id}/versions`).then((r) => r.data),
   compareVersions: (id, leftVersionId, rightVersionId) =>
@@ -31,6 +33,8 @@ export const documentsApi = {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       .then((r) => r.data),
+  setCurrentVersion: (id, versionId) =>
+    api.post(`/documents/${id}/versions/${versionId}/current`).then((r) => r.data),
   content: (id) => api.get(`/documents/${id}/content`).then((r) => r.data),
   saveContent: (id, payload) => api.put(`/documents/${id}/content`, payload).then((r) => r.data),
   aiSummarize: (id) =>

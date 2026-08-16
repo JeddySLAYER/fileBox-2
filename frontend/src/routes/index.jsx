@@ -17,9 +17,9 @@ import FavoritesPage from '@/modules/favorites/pages/FavoritesPage'
 import AiToolsPage from '@/modules/ai/pages/AiToolsPage'
 import NotificationsPage from '@/modules/notifications/pages/NotificationsPage'
 import ProjectDetailPage from '@/modules/projects/pages/ProjectDetailPage'
+import ProfilePage from '@/modules/profile/pages/ProfilePage'
 import ProjectsPage from '@/modules/projects/pages/ProjectsPage'
 import RolesPage from '@/modules/roles/pages/RolesPage'
-import SettingsPage from '@/modules/settings/pages/SettingsPage'
 import TagsPage from '@/modules/tags/pages/TagsPage'
 import TrashPage from '@/modules/trash/pages/TrashPage'
 import UsersPage from '@/modules/users/pages/UsersPage'
@@ -49,6 +49,8 @@ export default function AppRoutes() {
           <Route path="/shared" element={<MyAccessesPage />} />
           <Route path="/archives" element={<ArchivesPage />} />
           <Route path="/trash" element={<TrashPage />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/settings" element={<Navigate to="/profile" replace />} />
 
           <Route
             path="/users"
@@ -121,14 +123,6 @@ export default function AppRoutes() {
             element={
               <RequirePermissionRoute permission="tags.manage">
                 <TagsPage />
-              </RequirePermissionRoute>
-            }
-          />
-          <Route
-            path="/settings"
-            element={
-              <RequirePermissionRoute permission="settings.manage">
-                <SettingsPage />
               </RequirePermissionRoute>
             }
           />

@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { RotateCcw } from 'lucide-react'
+import { RotateCcw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { useConfirm } from '@/components/ConfirmDialog'
 import Button from '@/components/ui/Button'
 import EmptyState from '@/components/ui/EmptyState'
 import LoadingScreen from '@/components/ui/LoadingScreen'
@@ -15,11 +16,13 @@ import { can } from '@/lib/permissions'
 import { queryKeys } from '@/lib/queryClient'
 import { documentsApi } from '@/modules/documents/api'
 import { foldersApi } from '@/modules/folders/api'
+import { trashApi } from '@/modules/trash/api'
 import { useAuthStore } from '@/stores/authStore'
 
 export default function TrashPage() {
   const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
+  const confirm = useConfirm()
   const [tab, setTab] = useState('documents')
 
   const tabs = [
@@ -39,11 +42,17 @@ export default function TrashPage() {
     enabled: tab === 'folders',
   })
 
+  function invalidateTrash() {
+    queryClient.invalidateQueries({ queryKey: ['documents'] })
+    queryClient.invalidateQueries({ queryKey: ['folders'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
+  }
+
   const restoreDoc = useMutation({
     mutationFn: (id) => documentsApi.restore(id),
     onSuccess: (res) => {
       toast.success(res.message)
-      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      invalidateTrash()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
@@ -52,13 +61,72 @@ export default function TrashPage() {
     mutationFn: (id) => foldersApi.restore(id),
     onSuccess: (res) => {
       toast.success(res.message)
-      queryClient.invalidateQueries({ queryKey: ['folders'] })
+      invalidateTrash()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const forceDoc = useMutation({
+    mutationFn: (id) => documentsApi.forceRemove(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateTrash()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const forceFolder = useMutation({
+    mutationFn: (id) => foldersApi.forceRemove(id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateTrash()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
+  const emptyTrash = useMutation({
+    mutationFn: () => trashApi.empty(),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      invalidateTrash()
     },
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
   const documents = unwrapPaginated(docsQuery.data).data
   const folders = unwrapList(foldersQuery.data)
+  const canEmpty = can(user, 'documents.delete') || can(user, 'folders.delete')
+
+  async function confirmEmpty() {
+    const ok = await confirm({
+      title: 'Vider la corbeille',
+      description:
+        'Tous les éléments visibles dans votre corbeille seront supprimés définitivement. Cette action est irréversible. Les fichiers sont aussi purgés automatiquement après 30 jours.',
+      confirmLabel: 'Vider la corbeille',
+      tone: 'danger',
+    })
+    if (ok) emptyTrash.mutate()
+  }
+
+  async function confirmForceDoc(doc) {
+    const ok = await confirm({
+      title: 'Supprimer définitivement',
+      description: `« ${doc.title} » sera définitivement supprimé, y compris ses fichiers. Irréversible.`,
+      confirmLabel: 'Supprimer',
+      tone: 'danger',
+    })
+    if (ok) forceDoc.mutate(doc.id)
+  }
+
+  async function confirmForceFolder(folder) {
+    const ok = await confirm({
+      title: 'Supprimer définitivement',
+      description: `« ${folder.name} » et son contenu seront définitivement supprimés. Irréversible.`,
+      confirmLabel: 'Supprimer',
+      tone: 'danger',
+    })
+    if (ok) forceFolder.mutate(folder.id)
+  }
 
   if (tabs.length === 0) {
     return <EmptyState title="Accès refusé" description="Aucune permission de corbeille." />
@@ -68,7 +136,20 @@ export default function TrashPage() {
     <>
       <PageHeader
         title="Corbeille"
-        description="Documents et dossiers supprimés — restauration possible."
+        description="Restaurez un élément ou supprimez-le définitivement. Les fichiers sont purgés automatiquement après 30 jours."
+        actions={
+          canEmpty ? (
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={emptyTrash.isPending}
+              onClick={confirmEmpty}
+            >
+              <Trash2 className="h-4 w-4" />
+              Vider la corbeille
+            </Button>
+          ) : null
+        }
       />
 
       <Tabs
@@ -96,10 +177,18 @@ export default function TrashPage() {
                       {formatDate(doc.deleted_at, true)}
                     </p>
                   </div>
-                  <Button size="sm" variant="secondary" onClick={() => restoreDoc.mutate(doc.id)}>
-                    <RotateCcw className="h-4 w-4" />
-                    Restaurer
-                  </Button>
+                  <div className="flex shrink-0 gap-2">
+                    <Button size="sm" variant="secondary" onClick={() => restoreDoc.mutate(doc.id)}>
+                      <RotateCcw className="h-4 w-4" />
+                      Restaurer
+                    </Button>
+                    {can(user, 'documents.delete') ? (
+                      <Button size="sm" variant="danger" onClick={() => confirmForceDoc(doc)}>
+                        <Trash2 className="h-4 w-4" />
+                        Supprimer
+                      </Button>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -121,14 +210,22 @@ export default function TrashPage() {
                       {formatDate(folder.deleted_at, true)}
                     </p>
                   </div>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => restoreFolder.mutate(folder.id)}
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                    Restaurer
-                  </Button>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => restoreFolder.mutate(folder.id)}
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      Restaurer
+                    </Button>
+                    {can(user, 'folders.delete') ? (
+                      <Button size="sm" variant="danger" onClick={() => confirmForceFolder(folder)}>
+                        <Trash2 className="h-4 w-4" />
+                        Supprimer
+                      </Button>
+                    ) : null}
+                  </div>
                 </li>
               ))}
             </ul>

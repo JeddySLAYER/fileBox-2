@@ -10,4 +10,5 @@ export const foldersApi = {
     api.put(`/folders/${id}/move`, { parent_id: parentId }).then((r) => r.data),
   remove: (id) => api.delete(`/folders/${id}`).then((r) => r.data),
   restore: (id) => api.post(`/folders/${id}/restore`).then((r) => r.data),
+  forceRemove: (id) => api.delete(`/folders/${id}/permanent`).then((r) => r.data),
 }

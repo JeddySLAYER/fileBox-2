@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, CheckCheck } from 'lucide-react'
 import { toast } from 'sonner'
@@ -11,6 +12,19 @@ import { unwrapPaginated } from '@/lib/apiHelpers'
 import { formatDate } from '@/lib/format'
 import { queryKeys } from '@/lib/queryClient'
 import { notificationsApi } from '@/modules/notifications/api'
+
+function notificationHref(n) {
+  if (n.href) return n.href
+  const data = n.data ?? {}
+  if (data.href) return data.href
+  if (data.document_id || n.document_id) {
+    return `/documents/${data.document_id || n.document_id}?tab=validations`
+  }
+  if (String(n.type || data.type || '').startsWith('validation.')) {
+    return '/validations?tab=suivre'
+  }
+  return null
+}
 
 export default function NotificationsPage() {
   const queryClient = useQueryClient()
@@ -63,7 +77,11 @@ export default function NotificationsPage() {
         <EmptyState title="Aucune notification" />
       ) : (
         <ul className="divide-y divide-border rounded-xl border border-border bg-background">
-          {notifications.map((n) => (
+          {notifications.map((n) => {
+            const href = notificationHref(n)
+            const title = n.title ?? n.data?.title ?? n.type
+            const message = n.message ?? n.data?.message
+            return (
             <li
               key={n.id}
               className={`flex items-start justify-between gap-3 px-4 py-3 ${
@@ -73,11 +91,23 @@ export default function NotificationsPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <Bell className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <p className="text-sm font-medium">{n.title ?? n.type}</p>
+                  {href ? (
+                    <Link
+                      to={href}
+                      className="text-sm font-medium hover:text-primary"
+                      onClick={() => {
+                        if (!n.read_at) markRead.mutate(n.id)
+                      }}
+                    >
+                      {title}
+                    </Link>
+                  ) : (
+                    <p className="text-sm font-medium">{title}</p>
+                  )}
                   {!n.read_at ? <Badge tone="primary">Non lu</Badge> : null}
                 </div>
-                {n.message ? (
-                  <p className="mt-1 text-sm text-muted-foreground">{n.message}</p>
+                {message ? (
+                  <p className="mt-1 text-sm text-muted-foreground">{message}</p>
                 ) : null}
                 <p className="mt-1 text-xs text-muted-foreground">
                   {formatDate(n.created_at, true)}
@@ -89,7 +119,8 @@ export default function NotificationsPage() {
                 </Button>
               ) : null}
             </li>
-          ))}
+            )
+          })}
         </ul>
       )}
     </>

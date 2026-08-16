@@ -158,6 +158,16 @@ export default function DocumentDetailPage() {
     onError: (e) => toast.error(getErrorMessage(e)),
   })
 
+  const setCurrentVersion = useMutation({
+    mutationFn: (versionId) => documentsApi.setCurrentVersion(id, versionId),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      setComparison(null)
+      invalidateDoc()
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  })
+
   const compareVersions = useMutation({
     mutationFn: () =>
       documentsApi.compareVersions(id, Number(compareLeft), Number(compareRight)),
@@ -364,7 +374,7 @@ export default function DocumentDetailPage() {
                 onClick={() => proposeDocument.mutate()}
               >
                 <Send className="h-4 w-4" />
-                Proposer à validation
+                {document.status === 'rejete' ? 'Reproposer à validation' : 'Proposer à validation'}
               </Button>
             ) : null}
             {can(user, 'documents.update') && document.status !== 'archive' ? (
@@ -414,11 +424,15 @@ export default function DocumentDetailPage() {
 
       {document.can_propose ? (
         <div className="mb-4 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm">
-          <p className="font-medium">Proposition à validation</p>
+          <p className="font-medium">
+            {document.status === 'rejete' ? 'Document rejeté — nouvelle version' : 'Proposition à validation'}
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {document.requires_workflow
-              ? 'Ce type de document exige un circuit de validation. Proposez-le, ou un responsable peut démarrer le workflow depuis l’onglet Validations.'
-              : 'Seuls les documents proposés suivent un workflow. Cliquez sur « Proposer à validation » pour les envoyer aux responsables.'}
+            {document.status === 'rejete'
+              ? 'Déposez une nouvelle version (onglet Versions), puis cliquez sur « Proposer à validation » pour renvoyer le document.'
+              : document.requires_workflow
+                ? 'Ce type de document exige un circuit de validation. Proposez-le, ou un responsable peut démarrer le workflow depuis l’onglet Validations.'
+                : 'Seuls les documents proposés suivent un workflow. Cliquez sur « Proposer à validation » pour les envoyer aux responsables.'}
           </p>
         </div>
       ) : null}
@@ -793,9 +807,15 @@ export default function DocumentDetailPage() {
             {canAny(user, ['documents.update', 'versions.manage']) &&
             document.status !== 'archive' ? (
               <Card>
-                <Label>Nouvelle version (réupload)</Label>
+                <Label>
+                  {document.status === 'rejete'
+                    ? 'Nouvelle version après rejet'
+                    : 'Nouvelle version (réupload)'}
+                </Label>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  La version courante est verrouillée automatiquement avant création de la suivante.
+                  {document.status === 'rejete'
+                    ? 'Uploadez la version corrigée, puis reproposez le document à validation.'
+                    : 'La version courante est verrouillée automatiquement avant création de la suivante.'}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Input
@@ -938,7 +958,7 @@ export default function DocumentDetailPage() {
                 {versions.map((v) => {
                   const isCurrent = document.current_version?.id === v.id
                   return (
-                    <li key={v.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                    <li key={v.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
                       <div>
                         <p className="text-sm font-medium">
                           v{v.version_number} — {v.file_name}
@@ -948,9 +968,19 @@ export default function DocumentDetailPage() {
                           {v.change_summary ? ` · ${v.change_summary}` : ''}
                         </p>
                       </div>
-                      <div className="flex gap-1.5">
-                        {isCurrent ? <Badge tone="success">Courante</Badge> : null}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {isCurrent ? <Badge tone="success">À jour</Badge> : null}
                         {v.is_locked ? <Badge tone="neutral">Verrouillée</Badge> : null}
+                        {!isCurrent && document.can_set_current_version ? (
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={setCurrentVersion.isPending}
+                            onClick={() => setCurrentVersion.mutate(v.id)}
+                          >
+                            Définir comme à jour
+                          </Button>
+                        ) : null}
                       </div>
                     </li>
                   )
@@ -989,6 +1019,7 @@ export default function DocumentDetailPage() {
             subjectToWorkflow={document.subject_to_workflow}
             recommendsWorkflow={document.recommends_workflow}
             canPropose={document.can_propose}
+            canAcceptProposition={document.can_accept_proposition}
             requiresWorkflow={document.requires_workflow}
             canStartWorkflow={document.can_start_workflow}
             onUpdated={invalidateDoc}

@@ -45,8 +45,8 @@ export default function ProposedDocumentsPage() {
         title="Validations"
         description={
           canManage
-            ? 'Démarrez les propositions, puis traitez les étapes qui vous sont assignées.'
-            : 'Traitez les étapes de validation qui vous sont assignées.'
+            ? 'Propositions à trancher, suivi de l’étape courante, et circuit complet sur chaque fiche. Seuls les assignés d’étape approuvent.'
+            : 'Étape courante de vos documents (suivi) et actions si vous êtes le validateur assigné.'
         }
       />
       {tabs.length > 1 ? (
@@ -66,6 +66,16 @@ function PropositionsPanel() {
   const { data, isLoading, isError } = useQuery({
     queryKey: queryKeys.documents({ status: 'propose' }),
     queryFn: () => documentsApi.list({ status: 'propose', per_page: 50 }),
+  })
+
+  const acceptProposition = useMutation({
+    mutationFn: (doc) => documentsApi.acceptProposition(doc.id),
+    onSuccess: (res) => {
+      toast.success(res.message)
+      queryClient.invalidateQueries({ queryKey: ['documents'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
+    },
+    onError: (e) => toast.error(getErrorMessage(e)),
   })
 
   const startWorkflow = useMutation({
@@ -120,6 +130,17 @@ function PropositionsPanel() {
                 <Eye className="h-4 w-4" />
                 Voir
               </Button>
+              {doc.can_accept_proposition ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={acceptProposition.isPending}
+                  onClick={() => acceptProposition.mutate(doc)}
+                >
+                  <Check className="h-4 w-4" />
+                  Valider
+                </Button>
+              ) : null}
               <Button
                 size="sm"
                 variant={startId === doc.id ? 'secondary' : 'primary'}
@@ -127,7 +148,7 @@ function PropositionsPanel() {
                 disabled={!doc.can_start_workflow && startId !== doc.id}
               >
                 <Play className="h-4 w-4" />
-                {startId === doc.id ? 'Annuler' : 'Démarrer'}
+                {startId === doc.id ? 'Annuler' : 'Assigner un workflow'}
               </Button>
             </div>
           </div>
@@ -276,7 +297,7 @@ function InboxPanel() {
     return (
       <EmptyState
         title="Rien à suivre pour le moment"
-        description="Les étapes de validation qui vous sont assignées apparaîtront ici."
+        description="Les étapes courantes des documents que vous proposez, gérez ou devez valider apparaîtront ici."
       />
     )
   }
@@ -291,8 +312,14 @@ function InboxPanel() {
 }
 
 function PendingCard({ item, onDone }) {
+  const user = useAuthStore((s) => s.user)
   const [comment, setComment] = useState('')
   const doc = item.document
+  const step = item.workflow_step
+  const canAct =
+    Boolean(user) &&
+    (step?.responsible_user?.id === user.id ||
+      (step?.responsible_role?.id && user.roles?.some((r) => r.id === step.responsible_role.id)))
 
   const approve = useMutation({
     mutationFn: () => validationsApi.approve(item.id, comment || undefined),
@@ -338,7 +365,7 @@ function PendingCard({ item, onDone }) {
               {doc?.title ?? 'Document'}
             </Link>
             <Badge tone={item.is_overdue ? 'danger' : 'warning'}>
-              {item.is_overdue ? 'En retard' : 'À valider'}
+              {item.is_overdue ? 'En retard' : canAct ? 'À valider' : 'En cours'}
             </Badge>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
@@ -358,25 +385,34 @@ function PendingCard({ item, onDone }) {
           Fiche
         </Button>
       </div>
-      <Input
-        className="mt-3"
-        placeholder="Commentaire (obligatoire pour un rejet)"
-        value={comment}
-        onChange={(e) => setComment(e.target.value)}
-      />
-      <div className="mt-3 flex flex-wrap gap-2">
-        <Button size="sm" disabled={busy} onClick={() => approve.mutate()}>
-          <Check className="h-4 w-4" />
-          Approuver
-        </Button>
-        <Button size="sm" variant="secondary" disabled={busy} onClick={() => correction.mutate()}>
-          Correction
-        </Button>
-        <Button size="sm" variant="danger" disabled={busy} onClick={() => reject.mutate()}>
-          <X className="h-4 w-4" />
-          Rejeter
-        </Button>
-      </div>
+      {canAct ? (
+        <>
+          <Input
+            className="mt-3"
+            placeholder="Commentaire (obligatoire pour un rejet)"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+          />
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button size="sm" disabled={busy} onClick={() => approve.mutate()}>
+              <Check className="h-4 w-4" />
+              Approuver
+            </Button>
+            <Button size="sm" variant="secondary" disabled={busy} onClick={() => correction.mutate()}>
+              Correction
+            </Button>
+            <Button size="sm" variant="danger" disabled={busy} onClick={() => reject.mutate()}>
+              <X className="h-4 w-4" />
+              Rejeter
+            </Button>
+          </div>
+        </>
+      ) : (
+        <p className="mt-3 text-sm text-muted-foreground">
+          Étape en cours — suivi uniquement. Seul le validateur assigné peut approuver, demander une
+          correction ou rejeter.
+        </p>
+      )}
     </li>
   )
 }

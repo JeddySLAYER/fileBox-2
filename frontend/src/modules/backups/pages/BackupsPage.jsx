@@ -162,7 +162,7 @@ export default function BackupsPage() {
     <RequirePermission permission="settings.manage">
       <PageHeader
         title="Sauvegardes"
-        description="Sauvegardes et restauration de la plateforme."
+        description="Copie complète de la plateforme (données + fichiers). Utile avant une opération risquée. Restaurer remplace l’état actuel par celui de l’archive. Les copies de plus de 30 jours sont retirées automatiquement."
         actions={
           <Button size="sm" onClick={() => setShowForm(true)}>
             <Archive className="h-4 w-4" />
