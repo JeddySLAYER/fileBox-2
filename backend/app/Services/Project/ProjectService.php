@@ -3,9 +3,12 @@
 namespace App\Services\Project;
 
 use App\Models\Department;
+use App\Models\Document;
 use App\Models\Folder;
 use App\Models\Project;
 use App\Models\User;
+use App\Services\Document\DocumentService;
+use App\Services\Folder\FolderService;
 use App\Support\SoftDeleteArchive;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\Eloquent\Collection;
@@ -16,6 +19,11 @@ use Illuminate\Validation\ValidationException;
 class ProjectService
 {
     public const STATUSES = ['actif', 'en_pause', 'termine', 'archive'];
+
+    public function __construct(
+        private readonly FolderService $folderService,
+        private readonly DocumentService $documentService,
+    ) {}
 
     /**
      * @param  array{search?: string, department_id?: int, status?: string}  $filters
@@ -186,7 +194,33 @@ class ProjectService
 
     public function delete(Project $project): void
     {
-        SoftDeleteArchive::archive($project, ['code']);
+        DB::transaction(function () use ($project) {
+            $rootId = $project->root_folder_id;
+            $project->root_folder_id = null;
+            $project->save();
+
+            $root = $rootId ? Folder::query()->find($rootId) : null;
+            if ($root && ! $root->trashed()) {
+                $this->folderService->delete($root);
+            }
+
+            Folder::query()
+                ->where('project_id', $project->id)
+                ->orderByDesc('id')
+                ->get()
+                ->each(function (Folder $folder) {
+                    if (! $folder->trashed()) {
+                        $this->folderService->delete($folder);
+                    }
+                });
+
+            Document::query()
+                ->where('project_id', $project->id)
+                ->get()
+                ->each(fn (Document $document) => $this->documentService->delete($document));
+
+            SoftDeleteArchive::archive($project, ['code']);
+        });
     }
 
     /**

@@ -157,7 +157,88 @@ test('un utilisateur voit ses accès dans /accesses/mine', function () {
 
     $this->getJson('/api/accesses/mine')
         ->assertOk()
-        ->assertJsonCount(1, 'data');
+        ->assertJsonCount(1, 'data')
+        ->assertJsonCount(1, 'received')
+        ->assertJsonCount(0, 'granted')
+        ->assertJsonPath('data.0.accessible.type', 'folder')
+        ->assertJsonPath('data.0.accessible.name', 'Mine');
+});
+
+test('documents et dossiers partages apparaissent tous dans mes partages', function () {
+    $admin = adminUser();
+    $guest = collaboratorUser();
+
+    Sanctum::actingAs($admin);
+    $folder = Folder::query()->create(['name' => 'Dossier partagé', 'created_by' => $admin->id]);
+    $docId = $this->post('/api/documents', [
+        'title' => 'Doc partagé',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('p.pdf', 5, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    $otherFolder = Folder::query()->create(['name' => 'Autre dossier', 'created_by' => $admin->id]);
+
+    $this->postJson("/api/documents/{$docId}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view', 'download'],
+    ])->assertCreated();
+
+    $this->postJson("/api/folders/{$otherFolder->id}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($guest);
+
+    $mine = $this->getJson('/api/accesses/mine')->assertOk();
+    $types = collect($mine->json('received'))->pluck('accessible.type')->sort()->values()->all();
+    expect($types)->toBe(['document', 'folder']);
+
+    $titles = collect($mine->json('received'))
+        ->map(fn ($row) => $row['accessible']['title'] ?? $row['accessible']['name'] ?? null)
+        ->all();
+    expect($titles)->toContain('Doc partagé')
+        ->and($titles)->toContain('Autre dossier');
+
+    $dashboard = $this->getJson('/api/dashboard')->assertOk()->json('dashboard');
+    $shared = collect($dashboard['shared_documents'] ?? []);
+    expect($shared)->toHaveCount(2);
+    expect($shared->pluck('type')->sort()->values()->all())->toBe(['document', 'folder']);
+});
+
+test('mes partages incluent aussi ce que j ai partage', function () {
+    $owner = collaboratorUser();
+    $guest = collaboratorUser();
+
+    Sanctum::actingAs($owner);
+    $folder = Folder::query()->create(['name' => 'Notes owner', 'created_by' => $owner->id]);
+    $docId = $this->post('/api/documents', [
+        'title' => 'Fiche owner',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('o.pdf', 5, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    $this->postJson("/api/documents/{$docId}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view'],
+    ])->assertCreated();
+    $this->postJson("/api/folders/{$folder->id}/accesses", [
+        'user_id' => $guest->id,
+        'abilities' => ['view'],
+    ])->assertCreated();
+
+    $mine = $this->getJson('/api/accesses/mine')->assertOk();
+    expect($mine->json('received'))->toHaveCount(0);
+    expect($mine->json('granted'))->toHaveCount(2);
+
+    $grantedNames = collect($mine->json('granted'))
+        ->map(fn ($row) => $row['accessible']['title'] ?? $row['accessible']['name'])
+        ->all();
+    expect($grantedNames)->toContain('Fiche owner')
+        ->and($grantedNames)->toContain('Notes owner');
+
+    expect(collect($mine->json('granted'))->pluck('user.id')->unique()->all())
+        ->toBe([$guest->id]);
 });
 
 test('un utilisateur sans droit sur la ressource ne peut pas accorder un accès', function () {

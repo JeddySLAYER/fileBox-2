@@ -211,16 +211,41 @@ class AccessService
 
     public function listForUser(User $user, bool $activeOnly = true): Collection
     {
-        $query = Access::query()
-            ->where('user_id', $user->id)
-            ->with(['accessible', 'grantor'])
+        return $this->listAccesses(
+            Access::query()->where('user_id', $user->id),
+            $activeOnly,
+            with: ['accessible', 'grantor'],
+        );
+    }
+
+    /** Partages accordés par l’utilisateur (documents / dossiers qu’il a partagés). */
+    public function listGrantedByUser(User $user, bool $activeOnly = true): Collection
+    {
+        return $this->listAccesses(
+            Access::query()->where('granted_by', $user->id),
+            $activeOnly,
+            with: ['accessible', 'user', 'grantor'],
+        );
+    }
+
+    /**
+     * @param  list<string>  $with
+     */
+    private function listAccesses($query, bool $activeOnly, array $with): Collection
+    {
+        $query
+            ->whereIn('accessible_type', ['document', 'folder'])
+            ->with($with)
             ->latest();
 
         if ($activeOnly) {
             $query->active();
         }
 
-        return $query->get();
+        return $query
+            ->get()
+            ->filter(fn (Access $access) => $access->accessible !== null)
+            ->values();
     }
 
     public function userCan(User $user, Model $accessible, string $ability): bool

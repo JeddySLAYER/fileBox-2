@@ -10,6 +10,7 @@ use App\Events\Auth\UserLoggedOut;
 use App\Events\Backup\BackupCreated;
 use App\Events\Backup\BackupRestored;
 use App\Events\Comment\CommentPosted;
+use App\Events\Document\DocumentAccepted;
 use App\Events\Document\DocumentArchived;
 use App\Events\Document\DocumentContentSaved;
 use App\Events\Document\DocumentCreated;
@@ -27,6 +28,7 @@ use App\Events\Validation\ValidationActionTaken;
 use App\Listeners\Access\NotifyAccessGranted;
 use App\Listeners\Access\NotifyAccessRevoked;
 use App\Listeners\Comment\NotifyCommentParticipants;
+use App\Listeners\Document\NotifyDocumentAccepted;
 use App\Listeners\Document\NotifyDocumentArchived;
 use App\Listeners\Document\NotifyDocumentProposed;
 use App\Listeners\Document\NotifyDocumentPublished;
@@ -62,6 +64,10 @@ class EventServiceProvider extends ServiceProvider
         DocumentProposed::class => [
             RecordActivityLog::class,
             NotifyDocumentProposed::class,
+        ],
+        DocumentAccepted::class => [
+            RecordActivityLog::class,
+            NotifyDocumentAccepted::class,
         ],
         DocumentRestored::class => [RecordActivityLog::class],
 

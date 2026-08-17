@@ -21,7 +21,7 @@ export function hasRole(user, slug) {
   return Boolean(user?.roles?.some((r) => r.slug === slug))
 }
 
-/** Admin / direction : voient tous les espaces. Les autres sont bornés à leur appartenance. */
+/** Admin / direction : voient les espaces org (département / projet), pas les privés d’autrui. */
 export function seesAllSpaces(user) {
   return hasRole(user, 'administrateur') || hasRole(user, 'direction')
 }

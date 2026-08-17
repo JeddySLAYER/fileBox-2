@@ -11,7 +11,8 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 /**
  * Visibilité GED : un utilisateur ne voit que ses espaces
  * (département, projets dont il est membre, dossiers personnels, partages ACL).
- * Admin et direction conservent une vue globale.
+ * Admin et direction voient les espaces organisationnels (département / projet),
+ * mais pas les espaces privés d’autrui (sauf partage explicite).
  */
 class SpaceVisibility
 {
@@ -24,8 +25,34 @@ class SpaceVisibility
         return $user->hasRole('administrateur') || $user->hasRole('direction');
     }
 
+    /** Espace privé = hors projet et hors dossier public de département. */
+    public function isPersonalFolder(Folder $folder): bool
+    {
+        return $folder->project_id === null && $folder->department_id === null;
+    }
+
+    public function isPersonalDocument(Document $document): bool
+    {
+        if ($document->project_id !== null || $document->department_id !== null) {
+            return false;
+        }
+
+        if ($document->folder_id) {
+            $document->loadMissing('folder');
+            if ($document->folder && ! $this->isPersonalFolder($document->folder)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     public function canViewFolder(User $user, Folder $folder): bool
     {
+        if ($this->isPersonalFolder($folder)) {
+            return $this->canViewPersonalFolder($user, $folder);
+        }
+
         if ($this->canSeeAllSpaces($user)) {
             return true;
         }
@@ -53,6 +80,10 @@ class SpaceVisibility
 
     public function canViewDocument(User $user, Document $document): bool
     {
+        if ($this->isPersonalDocument($document)) {
+            return $this->canViewPersonalDocument($user, $document);
+        }
+
         if ($this->canSeeAllSpaces($user)) {
             return true;
         }
@@ -84,13 +115,26 @@ class SpaceVisibility
 
     public function applyFolderScope(Builder|Relation $query, User $user): void
     {
+        $aclIds = $this->accessService->accessibleFolderIds($user);
+
         if ($this->canSeeAllSpaces($user)) {
+            // Org (département / projet) + ses dossiers privés + partages privés.
+            $query->where(function (Builder $q) use ($user, $aclIds) {
+                $q->where(function (Builder $org) {
+                    $org->whereNotNull('project_id')
+                        ->orWhereNotNull('department_id');
+                })->orWhere('created_by', $user->id);
+
+                if ($aclIds !== []) {
+                    $q->orWhereIn('id', $aclIds);
+                }
+            });
+
             return;
         }
 
         $projectIds = $this->projectIds($user);
         $departmentIds = $this->departmentIds($user);
-        $aclIds = $this->accessService->accessibleFolderIds($user);
 
         $query->where(function (Builder $q) use ($user, $projectIds, $departmentIds, $aclIds) {
             $q->where('created_by', $user->id);
@@ -114,11 +158,28 @@ class SpaceVisibility
 
     public function applyDocumentScope(Builder|Relation $query, User $user): void
     {
+        $aclDocIds = $this->accessService->accessibleDocumentIds($user);
+
         if ($this->canSeeAllSpaces($user)) {
+            $query->where(function (Builder $q) use ($user, $aclDocIds) {
+                $q->where(function (Builder $org) {
+                    $org->whereNotNull('project_id')
+                        ->orWhereNotNull('department_id');
+                })->orWhere('author_id', $user->id)
+                    ->orWhere('owner_id', $user->id);
+
+                if ($aclDocIds !== []) {
+                    $q->orWhereIn('id', $aclDocIds);
+                }
+
+                $q->orWhereHas('folder', function (Builder $folderQuery) use ($user) {
+                    $folderQuery->withTrashed();
+                    $this->applyFolderScope($folderQuery, $user);
+                });
+            });
+
             return;
         }
-
-        $aclDocIds = $this->accessService->accessibleDocumentIds($user);
 
         $query->where(function (Builder $q) use ($user, $aclDocIds) {
             $q->where('author_id', $user->id)
@@ -129,6 +190,7 @@ class SpaceVisibility
             }
 
             $q->orWhereHas('folder', function (Builder $folderQuery) use ($user) {
+                $folderQuery->withTrashed();
                 $this->applyFolderScope($folderQuery, $user);
             });
         });
@@ -137,10 +199,6 @@ class SpaceVisibility
     /** @return list<int> */
     public function visibleFolderIds(User $user): array
     {
-        if ($this->canSeeAllSpaces($user)) {
-            return Folder::query()->pluck('id')->all();
-        }
-
         $query = Folder::query();
         $this->applyFolderScope($query, $user);
 
@@ -152,7 +210,18 @@ class SpaceVisibility
         $query->where('is_project_root', false);
 
         if ($this->canSeeAllSpaces($user)) {
-            $query->whereNull('parent_id');
+            $query->whereNull('parent_id')
+                ->where(function (Builder $q) use ($user) {
+                    $q->where(function (Builder $org) {
+                        $org->whereNotNull('project_id')
+                            ->orWhereNotNull('department_id');
+                    })->orWhere('created_by', $user->id);
+
+                    $aclIds = $this->accessService->accessibleFolderIds($user);
+                    if ($aclIds !== []) {
+                        $q->orWhereIn('id', $aclIds);
+                    }
+                });
 
             return;
         }
@@ -175,6 +244,7 @@ class SpaceVisibility
     public function restrictToExplorerRootDocuments(Builder|Relation $query, User $user): void
     {
         if ($this->canSeeAllSpaces($user)) {
+            // Les docs privés d’autrui sont exclus par applyDocumentScope.
             $query->whereNull('folder_id');
 
             return;
@@ -216,5 +286,35 @@ class SpaceVisibility
     public function belongsToDepartment(User $user, int $departmentId): bool
     {
         return in_array($departmentId, $this->departmentIds($user), true);
+    }
+
+    private function canViewPersonalFolder(User $user, Folder $folder): bool
+    {
+        if ((int) $folder->created_by === (int) $user->id) {
+            return true;
+        }
+
+        return $this->accessService->userCan($user, $folder, 'view');
+    }
+
+    private function canViewPersonalDocument(User $user, Document $document): bool
+    {
+        if ((int) $document->author_id === (int) $user->id
+            || (int) $document->owner_id === (int) $user->id) {
+            return true;
+        }
+
+        if ($this->accessService->userCan($user, $document, 'view')) {
+            return true;
+        }
+
+        if ($document->folder_id) {
+            $document->loadMissing('folder');
+            if ($document->folder && $this->isPersonalFolder($document->folder)) {
+                return $this->canViewPersonalFolder($user, $document->folder);
+            }
+        }
+
+        return false;
     }
 }

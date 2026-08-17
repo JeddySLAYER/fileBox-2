@@ -131,4 +131,17 @@ class FolderController extends Controller
             'folder' => new FolderResource($folder),
         ]);
     }
+
+    public function forceDestroy(int $id): JsonResponse
+    {
+        $folder = Folder::onlyTrashed()->findOrFail($id);
+
+        $this->authorize('forceDelete', $folder);
+
+        $this->folderService->forceDelete($folder);
+
+        return response()->json([
+            'message' => 'Dossier supprimé définitivement.',
+        ]);
+    }
 }

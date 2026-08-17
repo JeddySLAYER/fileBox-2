@@ -20,14 +20,24 @@ class AccessController extends Controller
         private readonly AccessService $accessService,
     ) {}
 
-    public function mine(Request $request): AnonymousResourceCollection
+    public function mine(Request $request): JsonResponse
     {
-        $accesses = $this->accessService->listForUser(
-            $request->user(),
-            activeOnly: ! $request->boolean('include_expired'),
-        );
+        $activeOnly = ! $request->boolean('include_expired');
+        $user = $request->user();
 
-        return AccessResource::collection($accesses);
+        $received = AccessResource::collection(
+            $this->accessService->listForUser($user, activeOnly: $activeOnly)
+        )->resolve();
+        $granted = AccessResource::collection(
+            $this->accessService->listGrantedByUser($user, activeOnly: $activeOnly)
+        )->resolve();
+
+        return response()->json([
+            // BC : data = reçus (comportement historique)
+            'data' => $received,
+            'received' => $received,
+            'granted' => $granted,
+        ]);
     }
 
     public function forDocument(Document $document): AnonymousResourceCollection

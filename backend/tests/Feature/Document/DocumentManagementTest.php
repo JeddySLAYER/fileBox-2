@@ -123,6 +123,58 @@ test('téléchargement de la version courante', function () {
         ->assertOk();
 });
 
+test('un admin peut définir quelle version est a jour', function () {
+    Sanctum::actingAs(adminUser());
+    $folder = makeFolder();
+
+    $created = $this->post('/api/documents', [
+        'title' => 'Versions',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('v1.pdf', 10, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document');
+
+    $v1Id = $created['current_version']['id'];
+
+    $this->post("/api/documents/{$created['id']}/versions", [
+        'file' => UploadedFile::fake()->create('v2.pdf', 10, 'application/pdf'),
+    ], ['Accept' => 'application/json'])
+        ->assertCreated()
+        ->assertJsonPath('document.current_version.version_number', 2);
+
+    $document = Document::query()->with('versions')->findOrFail($created['id']);
+    $v2Id = $document->current_version_id;
+
+    $this->postJson("/api/documents/{$created['id']}/versions/{$v1Id}/current")
+        ->assertOk()
+        ->assertJsonPath('document.current_version.id', $v1Id)
+        ->assertJsonPath('document.current_version.version_number', 1);
+
+    expect($document->fresh()->current_version_id)->toBe($v1Id)
+        ->and($document->versions()->find($v2Id)->is_locked)->toBeTrue();
+});
+
+test('un collaborateur ne peut pas définir la version a jour', function () {
+    $admin = adminUser();
+    Sanctum::actingAs($admin);
+    $folder = makeFolder();
+
+    $created = $this->post('/api/documents', [
+        'title' => 'No set',
+        'folder_id' => $folder->id,
+        'file' => UploadedFile::fake()->create('a.pdf', 10, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document');
+
+    $this->post("/api/documents/{$created['id']}/versions", [
+        'file' => UploadedFile::fake()->create('b.pdf', 10, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated();
+
+    $v1Id = Document::query()->findOrFail($created['id'])->versions()->where('version_number', 1)->value('id');
+
+    Sanctum::actingAs(collaboratorUser());
+    $this->postJson("/api/documents/{$created['id']}/versions/{$v1Id}/current")
+        ->assertForbidden();
+});
+
 test('un utilisateur sans permission documents ne peut pas créer', function () {
     // invite n'a pas documents.create
     $invite = \App\Models\User::factory()->create([

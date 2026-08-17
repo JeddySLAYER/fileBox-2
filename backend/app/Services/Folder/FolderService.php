@@ -9,6 +9,7 @@ use App\Events\Folder\FolderDeleted;
 use App\Models\Folder;
 use App\Models\User;
 use App\Services\Access\SpaceVisibility;
+use App\Services\Document\DocumentService;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -17,6 +18,7 @@ class FolderService
 {
     public function __construct(
         private readonly SpaceVisibility $spaceVisibility,
+        private readonly DocumentService $documentService,
     ) {}
 
     /**
@@ -219,6 +221,31 @@ class FolderService
         $folder->restore();
 
         return $folder->load(['creator', 'project', 'department'])->loadCount(['children', 'documents']);
+    }
+
+    public function forceDelete(Folder $folder): void
+    {
+        DB::transaction(function () use ($folder) {
+            $this->forceDeleteRecursive($folder);
+        });
+    }
+
+    private function forceDeleteRecursive(Folder $folder): void
+    {
+        $children = $folder->children()->withTrashed()->get();
+        foreach ($children as $child) {
+            $this->forceDeleteRecursive($child);
+        }
+
+        $documents = $folder->documents()->withTrashed()->get();
+        foreach ($documents as $document) {
+            $this->documentService->forceDelete($document);
+        }
+
+        $folder->tags()->detach();
+        $folder->accesses()->delete();
+        $folder->favorites()->delete();
+        $folder->forceDelete();
     }
 
     private function assertValidParent(Folder $folder, ?int $parentId): void

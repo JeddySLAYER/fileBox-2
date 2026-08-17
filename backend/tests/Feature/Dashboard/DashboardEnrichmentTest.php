@@ -42,6 +42,7 @@ test('favoris document ajout et retrait', function () {
 
 test('rejet exige un commentaire', function () {
     $admin = adminUser();
+    $validator = collaboratorUser();
     Sanctum::actingAs($admin);
 
     $project = Project::query()->create([
@@ -68,7 +69,12 @@ test('rejet exige un commentaire', function () {
         'created_by' => $admin->id,
         'is_active' => true,
     ]);
-    $workflow->steps()->create(['name' => 'S1', 'step_order' => 1, 'is_mandatory' => true]);
+    $workflow->steps()->create([
+        'name' => 'S1',
+        'step_order' => 1,
+        'is_mandatory' => true,
+        'responsible_user_id' => $validator->id,
+    ]);
 
     $this->postJson("/api/documents/{$docId}/propose")->assertOk();
 
@@ -78,6 +84,7 @@ test('rejet exige un commentaire', function () {
 
     $validationId = Validation::query()->where('document_id', $docId)->value('id');
 
+    Sanctum::actingAs($validator);
     $this->postJson("/api/validations/{$validationId}/reject", [])
         ->assertUnprocessable();
 

@@ -80,6 +80,12 @@ test('responsable ne voit que les documents de son departement', function () {
     $deptA->update(['manager_id' => $manager->id]);
     attachRole($manager, 'responsable_departement');
 
+    $outsider = User::factory()->create([
+        'must_change_password' => false,
+        'is_active' => true,
+        'department_id' => $deptB->id,
+    ]);
+
     $folderA = Folder::query()->create([
         'name' => 'A',
         'department_id' => $deptA->id,
@@ -88,11 +94,11 @@ test('responsable ne voit que les documents de son departement', function () {
     $folderB = Folder::query()->create([
         'name' => 'B',
         'department_id' => $deptB->id,
-        'created_by' => $manager->id,
+        'created_by' => $outsider->id,
     ]);
 
     makeDoc($manager, $folderA, ['department_id' => $deptA->id]);
-    makeDoc($manager, $folderB, ['department_id' => $deptB->id]);
+    makeDoc($outsider, $folderB, ['department_id' => $deptB->id]);
 
     Sanctum::actingAs($manager);
 
@@ -109,6 +115,11 @@ test('chef de projet ne voit que ses projets', function () {
     ]);
     attachRole($chef, 'chef_projet');
 
+    $otherAuthor = User::factory()->create([
+        'must_change_password' => false,
+        'is_active' => true,
+    ]);
+
     $mine = Project::query()->create([
         'name' => 'Mine',
         'code' => 'PRJ-MINE',
@@ -117,6 +128,7 @@ test('chef de projet ne voit que ses projets', function () {
     $other = Project::query()->create([
         'name' => 'Other',
         'code' => 'PRJ-OTHER',
+        'manager_id' => $otherAuthor->id,
     ]);
 
     $folderMine = Folder::query()->create([
@@ -127,11 +139,11 @@ test('chef de projet ne voit que ses projets', function () {
     $folderOther = Folder::query()->create([
         'name' => 'FO',
         'project_id' => $other->id,
-        'created_by' => $chef->id,
+        'created_by' => $otherAuthor->id,
     ]);
 
     makeDoc($chef, $folderMine, ['project_id' => $mine->id]);
-    makeDoc($chef, $folderOther, ['project_id' => $other->id]);
+    makeDoc($otherAuthor, $folderOther, ['project_id' => $other->id]);
 
     Sanctum::actingAs($chef);
 
@@ -140,6 +152,34 @@ test('chef de projet ne voit que ses projets', function () {
         ->assertJsonPath('dashboard.scope.mode', 'project')
         ->assertJsonPath('dashboard.counts.documents', 1)
         ->assertJsonPath('dashboard.counts.projects', 1);
+});
+
+test('le compteur documents du dashboard colle avec la liste accessible', function () {
+    $admin = adminUser();
+    $collab = collaboratorUser();
+    Sanctum::actingAs($admin);
+
+    $folderShared = Folder::query()->create(['name' => 'Partage', 'created_by' => $admin->id]);
+    $folderHidden = Folder::query()->create(['name' => 'Cache', 'created_by' => $admin->id]);
+
+    $visible = makeDoc($admin, $folderShared);
+    makeDoc($admin, $folderHidden);
+    makeDoc($admin, $folderShared, ['status' => DocumentStatus::Archived->value]);
+
+    $this->postJson("/api/documents/{$visible->id}/accesses", [
+        'user_id' => $collab->id,
+        'abilities' => ['view'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($collab);
+
+    $listCount = $this->getJson('/api/documents')->assertOk()->json('meta.total')
+        ?? count($this->getJson('/api/documents')->json('data'));
+
+    $this->getJson('/api/dashboard')
+        ->assertOk()
+        ->assertJsonPath('dashboard.scope.mode', 'home')
+        ->assertJsonPath('dashboard.counts.documents', $listCount);
 });
 
 test('journal metier est scope pour le responsable', function () {

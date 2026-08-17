@@ -556,7 +556,7 @@ export default function ExplorerPage() {
           inProjectSpace
             ? 'Dossier dédié au projet : ajoutez-y les ressources associées. Il n’apparaît pas à la racine de l’explorateur.'
             : globalSpaces
-              ? 'Parcourez, organisez et gérez dossiers et documents.'
+              ? 'Espaces organisationnels (département / projet). Les dossiers privés d’autrui restent invisibles sauf partage.'
               : 'Uniquement les espaces auxquels vous appartenez (département, projets, dossiers personnels).'
         }
         actions={

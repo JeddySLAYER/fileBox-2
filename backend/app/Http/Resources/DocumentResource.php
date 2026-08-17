@@ -25,6 +25,8 @@ class DocumentResource extends JsonResource
             'subject_to_workflow' => DocumentWorkflow::subjectToWorkflow($this->resource),
             'recommends_workflow' => DocumentWorkflow::recommendsWorkflow($this->resource),
             'can_propose' => DocumentWorkflow::canPropose($this->resource),
+            'can_accept_proposition' => $request->user()?->can('acceptProposition', $this->resource) ?? false,
+            'can_set_current_version' => $request->user()?->can('setCurrentVersion', $this->resource) ?? false,
             'requires_workflow' => DocumentWorkflow::requiresWorkflow($this->resource),
             'can_start_workflow' => DocumentWorkflow::canStartValidation($this->resource),
             'confidentiality' => $this->confidentiality?->value ?? $this->confidentiality,

@@ -159,6 +159,47 @@ test('admin et direction voient tous les espaces', function () {
         ->toContain('Paie');
 });
 
+test('espace prive invisible hors proprietaire et partage meme pour admin', function () {
+    $alice = spaceCollaborator();
+    $admin = adminUser();
+
+    Sanctum::actingAs($alice);
+    $folderId = $this->postJson('/api/folders', ['name' => 'Notes secrètes Alice'])
+        ->assertCreated()
+        ->json('folder.id');
+    $docId = $this->post('/api/documents', [
+        'title' => 'Journal privé',
+        'folder_id' => $folderId,
+        'file' => UploadedFile::fake()->create('j.pdf', 5, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
+
+    Sanctum::actingAs($admin);
+    $names = collect($this->getJson('/api/folders')->assertOk()->json('data'))->pluck('name')->all();
+    expect($names)->not->toContain('Notes secrètes Alice');
+    $this->getJson("/api/folders/{$folderId}")->assertForbidden();
+    $this->getJson("/api/documents/{$docId}")->assertForbidden();
+    $this->getJson('/api/documents')->assertOk();
+    expect(collect($this->getJson('/api/documents')->json('data'))->pluck('id')->all())
+        ->not->toContain($docId);
+
+    $dashboard = $this->getJson('/api/dashboard')->assertOk()->json();
+    $counts = $dashboard['dashboard']['counts'] ?? $dashboard['counts'] ?? [];
+    expect((int) ($counts['documents'] ?? 0))->toBe(0);
+
+    // Partage explicite → visible + compté
+    Sanctum::actingAs($alice);
+    $this->postJson("/api/documents/{$docId}/accesses", [
+        'user_id' => $admin->id,
+        'abilities' => ['view', 'download'],
+    ])->assertCreated();
+
+    Sanctum::actingAs($admin);
+    $this->getJson("/api/documents/{$docId}")->assertOk();
+    $dashboard = $this->getJson('/api/dashboard')->assertOk()->json();
+    $counts = $dashboard['dashboard']['counts'] ?? $dashboard['counts'] ?? [];
+    expect((int) ($counts['documents'] ?? 0))->toBeGreaterThanOrEqual(1);
+});
+
 test('un collaborateur ne peut pas créer un dossier public de département', function () {
     $rh = Department::query()->create(['name' => 'RH', 'code' => 'RH']);
     $user = spaceCollaborator($rh->id);

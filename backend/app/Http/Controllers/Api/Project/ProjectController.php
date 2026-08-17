@@ -76,7 +76,7 @@ class ProjectController extends Controller
         $this->projectService->delete($project);
 
         return response()->json([
-            'message' => 'Projet supprimé.',
+            'message' => 'Projet supprimé. Son espace et son contenu ont été placés dans la corbeille.',
         ]);
     }
 

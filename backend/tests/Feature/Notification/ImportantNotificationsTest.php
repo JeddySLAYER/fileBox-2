@@ -10,6 +10,7 @@ use App\Notifications\AccessExpiringNotification;
 use App\Notifications\AccessRevokedNotification;
 use App\Notifications\CommentPostedNotification;
 use App\Notifications\DocumentArchivedNotification;
+use App\Notifications\DocumentProposedAuthorNotification;
 use App\Notifications\DocumentProposedNotification;
 use App\Notifications\DocumentPublishedNotification;
 use App\Notifications\ValidationActionNotification;
@@ -98,17 +99,20 @@ test('proposition de document notifie les responsables workflow', function () {
         'created_by' => $manager->id,
     ]);
 
-    // L'auteur propose ; le chef de projet (autre user) reçoit la notif
+    // L'auteur dépose → proposition auto ; le chef de projet reçoit la notif
     Sanctum::actingAs($author);
-    $docId = $this->post('/api/documents', [
+    $this->post('/api/documents', [
         'title' => 'À proposer',
         'folder_id' => $folder->id,
         'file' => UploadedFile::fake()->create('p.pdf', 10, 'application/pdf'),
-    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
-
-    $this->postJson("/api/documents/{$docId}/propose")->assertOk();
+    ], ['Accept' => 'application/json'])
+        ->assertCreated()
+        ->assertJsonPath('document.status', 'propose');
 
     Notification::assertSentTo($manager, DocumentProposedNotification::class);
+    Notification::assertSentToTimes($manager, DocumentProposedNotification::class, 1);
+    Notification::assertSentTo($author, DocumentProposedAuthorNotification::class);
+    Notification::assertSentToTimes($author, DocumentProposedAuthorNotification::class, 1);
 });
 
 test('commentaire notifie auteur et propriétaire du document', function () {
@@ -316,9 +320,10 @@ test('un refus de validation notifie auteur, chef de projet et admin', function 
         'title' => 'À rejeter',
         'folder_id' => $folder->id,
         'file' => UploadedFile::fake()->create('r.pdf', 5, 'application/pdf'),
-    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
-
-    $this->postJson("/api/documents/{$docId}/propose")->assertOk();
+    ], ['Accept' => 'application/json'])
+        ->assertCreated()
+        ->assertJsonPath('document.status', 'propose')
+        ->json('document.id');
 
     Sanctum::actingAs($admin);
     $workflow = Workflow::query()->create([

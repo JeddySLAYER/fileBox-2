@@ -58,6 +58,11 @@ class FolderPolicy
             && $actor->hasPermission('folders.update');
     }
 
+    public function forceDelete(User $actor, Folder $folder): bool
+    {
+        return $this->delete($actor, $folder);
+    }
+
     public function share(User $actor, Folder $folder): bool
     {
         if (! $this->spaceVisibility->canViewFolder($actor, $folder)) {

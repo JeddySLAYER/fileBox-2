@@ -131,6 +131,15 @@ class AuthService
         return $user->fresh(['roles.permissions', 'department']);
     }
 
+    public function updateProfile(User $user, array $data): User
+    {
+        $user->name = $data['name'];
+        $user->email = $data['email'];
+        $user->save();
+
+        return $user->fresh(['roles.permissions', 'department']);
+    }
+
     private function ensureIsNotRateLimited(string $email, string $ip): void
     {
         $key = $this->throttleKey($email, $ip);

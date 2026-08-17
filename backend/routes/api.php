@@ -19,6 +19,7 @@ use App\Http\Controllers\Api\Role\RoleController;
 use App\Http\Controllers\Api\Search\SearchController;
 use App\Http\Controllers\Api\Setting\SettingController;
 use App\Http\Controllers\Api\Tag\TagController;
+use App\Http\Controllers\Api\Trash\TrashController;
 use App\Http\Controllers\Api\User\UserController;
 use App\Http\Controllers\Api\Validation\ValidationController;
 use App\Http\Controllers\Api\Workflow\WorkflowController;
@@ -29,6 +30,7 @@ Route::prefix('auth')->group(function () {
 
     Route::middleware(['auth:sanctum', 'active'])->group(function () {
         Route::get('/me', [AuthController::class, 'me']);
+        Route::put('/profile', [AuthController::class, 'updateProfile']);
         Route::post('/logout', [AuthController::class, 'logout']);
         Route::put('/password', [AuthController::class, 'changePassword']);
     });
@@ -88,6 +90,7 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
     Route::put('folders/{folder}/move', [FolderController::class, 'move']);
     Route::delete('folders/{folder}', [FolderController::class, 'destroy']);
     Route::post('folders/{id}/restore', [FolderController::class, 'restore']);
+    Route::delete('folders/{id}/permanent', [FolderController::class, 'forceDestroy']);
 
     // Types de documents
     Route::get('document-types', [DocumentTypeController::class, 'index']);
@@ -112,16 +115,19 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
     Route::put('documents/{document}', [DocumentController::class, 'update']);
     Route::delete('documents/{document}', [DocumentController::class, 'destroy']);
     Route::post('documents/{id}/restore', [DocumentController::class, 'restore']);
+    Route::delete('documents/{id}/permanent', [DocumentController::class, 'forceDestroy']);
     Route::put('documents/{document}/move', [DocumentController::class, 'move']);
     Route::post('documents/{document}/archive', [DocumentController::class, 'archive']);
     Route::post('documents/{document}/unarchive', [DocumentController::class, 'unarchive']);
     Route::post('documents/{document}/publish', [DocumentController::class, 'publish']);
     Route::post('documents/{document}/propose', [DocumentController::class, 'propose']);
+    Route::post('documents/{document}/accept', [DocumentController::class, 'acceptProposition']);
     Route::get('documents/{document}/content', [DocumentController::class, 'content']);
     Route::put('documents/{document}/content', [DocumentController::class, 'saveContent']);
     Route::get('documents/{document}/versions', [DocumentController::class, 'versions']);
     Route::get('documents/{document}/versions/compare', [DocumentController::class, 'compareVersions']);
     Route::post('documents/{document}/versions', [DocumentController::class, 'storeVersion']);
+    Route::post('documents/{document}/versions/{version}/current', [DocumentController::class, 'setCurrentVersion']);
     Route::get('documents/{document}/download', [DocumentController::class, 'download']);
     Route::get('documents/{document}/versions/{version}/download', [DocumentController::class, 'downloadVersion']);
     Route::get('documents/{document}/preview', [DocumentController::class, 'preview']);
@@ -184,6 +190,8 @@ Route::middleware(['auth:sanctum', 'active', 'password.changed'])->group(functio
 
     // Tableau de bord
     Route::get('dashboard', DashboardController::class);
+
+    Route::post('trash/empty', [TrashController::class, 'empty']);
 
     // Paramètres système
     Route::get('settings', [SettingController::class, 'index']);

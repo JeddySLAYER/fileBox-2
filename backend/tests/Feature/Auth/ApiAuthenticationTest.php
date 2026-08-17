@@ -147,6 +147,44 @@ test('un utilisateur authentifié peut consulter son profil', function () {
         ->assertJsonPath('user.email', $user->email);
 });
 
+test('un utilisateur peut mettre a jour son profil', function () {
+    $user = User::factory()->create([
+        'name' => 'Ancien nom',
+        'email' => 'old@filebox.test',
+        'must_change_password' => false,
+        'is_active' => true,
+    ]);
+    $user->roles()->attach(Role::query()->where('slug', 'collaborateur')->firstOrFail());
+
+    Sanctum::actingAs($user);
+
+    $this->putJson('/api/auth/profile', [
+        'name' => 'Nouveau nom',
+        'email' => 'new@filebox.test',
+    ])->assertOk()
+        ->assertJsonPath('user.name', 'Nouveau nom')
+        ->assertJsonPath('user.email', 'new@filebox.test');
+
+    expect($user->fresh()->email)->toBe('new@filebox.test');
+});
+
+test('le profil refuse un email deja utilise', function () {
+    User::factory()->create(['email' => 'taken@filebox.test']);
+    $user = User::factory()->create([
+        'email' => 'mine@filebox.test',
+        'must_change_password' => false,
+        'is_active' => true,
+    ]);
+
+    Sanctum::actingAs($user);
+
+    $this->putJson('/api/auth/profile', [
+        'name' => $user->name,
+        'email' => 'taken@filebox.test',
+    ])->assertUnprocessable()
+        ->assertJsonValidationErrors(['email']);
+});
+
 test('un utilisateur peut se déconnecter et invalider son token', function () {
     $user = User::factory()->create();
     $token = $user->createToken('pest')->plainTextToken;

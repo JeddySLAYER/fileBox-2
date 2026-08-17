@@ -13,8 +13,6 @@ class AccessResource extends JsonResource
     /** @return array<string, mixed> */
     public function toArray(Request $request): array
     {
-        $accessible = $this->whenLoaded('accessible') ? $this->accessible : null;
-
         return [
             'id' => $this->id,
             'abilities' => $this->abilities,
@@ -31,30 +29,48 @@ class AccessResource extends JsonResource
                 'id' => $this->grantor->id,
                 'name' => $this->grantor->name,
             ] : null),
-            'accessible_type' => $this->accessible_type,
+            'accessible_type' => $this->normalizeAccessibleType($this->accessible_type),
             'accessible_id' => $this->accessible_id,
-            'accessible' => $this->when($accessible !== null, function () use ($accessible) {
-                if ($accessible instanceof Document) {
-                    return [
-                        'type' => 'document',
-                        'id' => $accessible->id,
-                        'title' => $accessible->title,
-                        'reference' => $accessible->reference,
-                    ];
-                }
-
-                if ($accessible instanceof Folder) {
-                    return [
-                        'type' => 'folder',
-                        'id' => $accessible->id,
-                        'name' => $accessible->name,
-                    ];
-                }
-
-                return null;
+            'accessible' => $this->whenLoaded('accessible', function () {
+                return $this->serializeAccessible($this->accessible);
             }),
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
         ];
+    }
+
+    private function normalizeAccessibleType(?string $type): string
+    {
+        return match ($type) {
+            Document::class, 'document' => 'document',
+            Folder::class, 'folder' => 'folder',
+            default => (string) $type,
+        };
+    }
+
+    /** @return array<string, mixed>|null */
+    private function serializeAccessible(mixed $accessible): ?array
+    {
+        if ($accessible instanceof Document) {
+            return [
+                'type' => 'document',
+                'id' => $accessible->id,
+                'title' => $accessible->title,
+                'name' => $accessible->title,
+                'reference' => $accessible->reference,
+                'status' => $accessible->status?->value ?? $accessible->status,
+            ];
+        }
+
+        if ($accessible instanceof Folder) {
+            return [
+                'type' => 'folder',
+                'id' => $accessible->id,
+                'name' => $accessible->name,
+                'title' => $accessible->name,
+            ];
+        }
+
+        return null;
     }
 }

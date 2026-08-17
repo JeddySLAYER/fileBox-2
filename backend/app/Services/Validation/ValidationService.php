@@ -173,7 +173,21 @@ class ValidationService
         $validation->save();
     }
 
-    public function listForDocument(Document $document): Collection
+    public function listForDocument(Document $document, ?User $viewer = null): Collection
+    {
+        $validations = $this->allValidationsForDocument($document);
+
+        $viewer ??= auth()->user();
+        if (! $viewer || $this->canFollowWholeValidationProcess($viewer, $document)) {
+            return $validations;
+        }
+
+        return $validations
+            ->filter(fn (Validation $v) => $this->isStepAssignee($viewer, $v))
+            ->values();
+    }
+
+    private function allValidationsForDocument(Document $document): Collection
     {
         return Validation::query()
             ->where('document_id', $document->id)
@@ -184,7 +198,75 @@ class ValidationService
     }
 
     /**
-     * Étapes courantes à traiter : assigné nommément, ou superviseur dans ses espaces.
+     * Auteur, chef projet, admin / responsables : voient tout le circuit (suivi).
+     * Les validateurs « simples » ne voient que leur(s) étape(s).
+     */
+    private function canFollowWholeValidationProcess(User $user, Document $document): bool
+    {
+        if ($user->hasRole('administrateur')
+            || $user->hasPermission('workflows.manage')
+            || $user->hasPermission('validations.act')) {
+            return true;
+        }
+
+        if ((int) $user->id === (int) $document->author_id
+            || (int) $user->id === (int) $document->owner_id) {
+            return true;
+        }
+
+        $document->loadMissing('project');
+
+        return $document->project_id
+            && $user->managedProjects()->where('id', $document->project_id)->exists();
+    }
+
+    private function isStepAssignee(User $user, Validation $validation): bool
+    {
+        $step = $validation->workflowStep;
+        if (! $step) {
+            return false;
+        }
+
+        if ($step->responsible_user_id && (int) $step->responsible_user_id === (int) $user->id) {
+            return true;
+        }
+
+        if ($step->responsible_role_id
+            && $user->roles()->where('roles.id', $step->responsible_role_id)->exists()) {
+            return true;
+        }
+
+        return (int) $validation->user_id === (int) $user->id;
+    }
+
+    /** Visible / actionnable pour le validateur de l’étape courante. */
+    public function userIsCurrentStepAssignee(User $user, Document $document): bool
+    {
+        $current = $this->currentPending($document);
+
+        return $current !== null && $this->isStepAssignee($user, $current);
+    }
+
+    /** Assigné nommément (ou via rôle) sur au moins une étape du document. */
+    public function isAssignedOnDocument(User $user, Document $document): bool
+    {
+        $roleIds = $user->roles()->pluck('roles.id');
+
+        return Validation::query()
+            ->where('document_id', $document->id)
+            ->whereHas('workflowStep', function (Builder $q) use ($user, $roleIds) {
+                $q->where(function (Builder $inner) use ($user, $roleIds) {
+                    $inner->where('responsible_user_id', $user->id);
+                    if ($roleIds->isNotEmpty()) {
+                        $inner->orWhereIn('responsible_role_id', $roleIds);
+                    }
+                });
+            })
+            ->exists();
+    }
+
+    /**
+     * Étapes courantes : assignés (action) + auteur / chef projet / admin (suivi).
      */
     public function inbox(User $user): Collection
     {
@@ -201,20 +283,13 @@ class ValidationService
                 'user',
             ]);
 
-        $isSupervisor = $user->hasPermission('validations.act')
-            || $user->hasPermission('workflows.manage');
-
-        if ($isSupervisor) {
-            $query->where(function (Builder $q) use ($user) {
-                $q->whereHas('document', function (Builder $doc) use ($user) {
-                    $this->spaceVisibility->applyDocumentScope($doc, $user);
-                })->orWhere(function (Builder $assigned) use ($user) {
-                    $this->restrictToAssignee($assigned, $user);
-                });
+        $query->where(function (Builder $q) use ($user) {
+            $q->where(function (Builder $assigned) use ($user) {
+                $this->restrictToAssignee($assigned, $user);
+            })->orWhere(function (Builder $follow) use ($user) {
+                $this->restrictToFollowers($follow, $user);
             });
-        } else {
-            $this->restrictToAssignee($query, $user);
-        }
+        });
 
         return $query
             ->orderByRaw('case when due_at is null then 1 else 0 end')
@@ -231,6 +306,31 @@ class ValidationService
                 $inner->where('responsible_user_id', $user->id);
                 if ($roleIds->isNotEmpty()) {
                     $inner->orWhereIn('responsible_role_id', $roleIds);
+                }
+            });
+        });
+    }
+
+    /** Auteur, propriétaire, chef du projet, admin / workflows.manage. */
+    private function restrictToFollowers(Builder $query, User $user): void
+    {
+        if ($user->hasRole('administrateur') || $user->hasPermission('workflows.manage')) {
+            $query->whereHas('document', function (Builder $doc) use ($user) {
+                $this->spaceVisibility->applyDocumentScope($doc, $user);
+            });
+
+            return;
+        }
+
+        $managedProjectIds = $user->managedProjects()->pluck('id')->all();
+
+        $query->whereHas('document', function (Builder $doc) use ($user, $managedProjectIds) {
+            $doc->where(function (Builder $d) use ($user, $managedProjectIds) {
+                $d->where('author_id', $user->id)
+                    ->orWhere('owner_id', $user->id);
+
+                if ($managedProjectIds !== []) {
+                    $d->orWhereIn('project_id', $managedProjectIds);
                 }
             });
         });
@@ -363,7 +463,7 @@ class ValidationService
 
     public function currentPending(Document $document): ?Validation
     {
-        $validations = $this->listForDocument($document);
+        $validations = $this->allValidationsForDocument($document);
 
         return $validations->first(
             fn (Validation $v) => $v->status === ValidationStatus::Pending
@@ -391,13 +491,8 @@ class ValidationService
 
         $step = $validation->workflowStep()->firstOrFail();
 
-        // Superviseurs (admin, direction, responsables métier)
-        if ($actor->hasPermission('workflows.manage') || $actor->hasPermission('validations.act')) {
-            return;
-        }
-
-        // Qui de droit : responsable nommé sur l'étape (même sans permission globale)
-        if ($step->responsible_user_id && $step->responsible_user_id === $actor->id) {
+        // Uniquement la personne (ou le rôle) assignée à l’étape — pas l’admin / chef.
+        if ($step->responsible_user_id && (int) $step->responsible_user_id === (int) $actor->id) {
             return;
         }
 
@@ -423,7 +518,7 @@ class ValidationService
 
     private function allMandatoryApproved(Document $document): bool
     {
-        $validations = $this->listForDocument($document);
+        $validations = $this->allValidationsForDocument($document);
 
         $mandatory = $validations->filter(
             fn (Validation $v) => $v->workflowStep?->is_mandatory ?? true

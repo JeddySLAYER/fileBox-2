@@ -66,19 +66,20 @@ class DashboardService
                 'project_ids' => [],
             ],
             'counts' => [
-                'documents' => $this->accessibleDocumentsQuery($user)->count(),
+                'documents' => $this->accessibleActiveDocumentsQuery($user)->count(),
                 'folders' => $this->accessibleFoldersQuery($user)->count(),
                 'projects' => (clone $projectsQuery)->count(),
                 'users' => 0,
                 'users_active' => 0,
                 'documents_trashed' => 0,
-                'documents_archived' => 0,
+                'documents_archived' => $this->accessibleDocumentsQuery($user)
+                    ->where('status', DocumentStatus::Archived)
+                    ->count(),
                 'validations_pending' => $inbox->count(),
                 'validations_blocked' => 0,
             ],
             'documents_by_status' => [],
-            'recent_documents' => $this->accessibleDocumentsQuery($user)
-                ->where('status', '!=', DocumentStatus::Archived)
+            'recent_documents' => $this->accessibleActiveDocumentsQuery($user)
                 ->with(['author:id,name', 'folder:id,name'])
                 ->latest()
                 ->limit(6)
@@ -87,7 +88,7 @@ class DashboardService
             'recent_projects' => $projects,
             'pending_validations' => $this->serializeValidations($inbox->take(8)),
             'blocked_validations' => [],
-            'shared_documents' => $this->sharedDocuments($user),
+            'shared_documents' => $this->sharedWithMe($user),
             'needs_attention' => $this->needsAttentionDocuments($user),
             'recent_comments' => $this->recentCommentsOnMyDocuments($user),
             'favorites' => FavoriteResource::collection(
@@ -110,7 +111,8 @@ class DashboardService
             ]);
         }
 
-        $documentsByStatus = $this->scopedDocuments($scope)
+        $accessibleDocs = $this->accessibleDocumentsQuery($user);
+        $documentsByStatus = (clone $accessibleDocs)
             ->select('status', DB::raw('count(*) as total'))
             ->groupBy('status')
             ->pluck('total', 'status');
@@ -131,12 +133,14 @@ class DashboardService
             'counts' => [
                 'users' => $this->countUsers($scope),
                 'users_active' => $this->countUsers($scope, activeOnly: true),
-                'documents' => $this->scopedDocuments($scope)->count(),
-                'documents_trashed' => $this->scopedDocuments($scope, withTrashed: true)->onlyTrashed()->count(),
-                'documents_archived' => $this->scopedDocuments($scope)
+                'documents' => $this->accessibleActiveDocumentsQuery($user)->count(),
+                'documents_trashed' => $this->accessibleDocumentsQuery($user, withTrashed: true)
+                    ->onlyTrashed()
+                    ->count(),
+                'documents_archived' => (clone $accessibleDocs)
                     ->where('status', DocumentStatus::Archived->value)
                     ->count(),
-                'folders' => $this->scopedFolders($scope)->count(),
+                'folders' => $this->accessibleFoldersQuery($user)->count(),
                 'projects' => $this->countProjects($scope),
                 'validations_pending' => (clone $pendingQuery)->count(),
                 'validations_blocked' => (clone $blockedQuery)->count(),
@@ -146,8 +150,7 @@ class DashboardService
                     $status->value => (int) ($documentsByStatus[$status->value] ?? 0),
                 ])
                 ->all(),
-            'recent_documents' => $this->scopedDocuments($scope)
-                ->where('status', '!=', DocumentStatus::Archived)
+            'recent_documents' => $this->accessibleActiveDocumentsQuery($user)
                 ->with(['author:id,name', 'folder:id,name'])
                 ->latest()
                 ->limit(6)
@@ -177,7 +180,7 @@ class DashboardService
             'favorites' => FavoriteResource::collection(
                 $this->favoriteService->listForUser($user)->take(6)
             )->resolve(),
-            'shared_documents' => [],
+            'shared_documents' => $this->sharedWithMe($user),
             'needs_attention' => [],
             'recent_comments' => [],
             'recent_activity' => $this->activityLog
@@ -189,12 +192,41 @@ class DashboardService
         ];
     }
 
-    private function accessibleDocumentsQuery(User $user): Builder
+    private function accessibleDocumentsQuery(User $user, bool $withTrashed = false): Builder
     {
-        $query = Document::query();
+        $query = $withTrashed ? Document::withTrashed() : Document::query();
         $this->spaceVisibility->applyDocumentScope($query, $user);
 
         return $query;
+    }
+
+    /** Documents accessibles hors archives (espace « pour tout le monde » = hors circuit). */
+    private function accessibleActiveDocumentsQuery(User $user): Builder
+    {
+        $query = $this->accessibleDocumentsQuery($user)
+            ->where('status', '!=', DocumentStatus::Archived);
+
+        if ($user->hasRole('administrateur') || $user->hasPermission('workflows.manage')) {
+            return $query;
+        }
+
+        $managedProjectIds = $user->managedProjects()->pluck('id')->all();
+
+        return $query->where(function (Builder $q) use ($managedProjectIds) {
+            $q->whereNotIn('status', [
+                DocumentStatus::Proposed,
+                DocumentStatus::InValidation,
+            ]);
+
+            if ($managedProjectIds !== []) {
+                $q->orWhere(function (Builder $pending) use ($managedProjectIds) {
+                    $pending->whereIn('status', [
+                        DocumentStatus::Proposed,
+                        DocumentStatus::InValidation,
+                    ])->whereIn('project_id', $managedProjectIds);
+                });
+            }
+        });
     }
 
     private function accessibleFoldersQuery(User $user): Builder
@@ -205,25 +237,59 @@ class DashboardService
         return $query;
     }
 
-    /** @return list<array<string, mixed>> */
-    private function sharedDocuments(User $user): array
+    /**
+     * Documents et dossiers partagés explicitement avec l’utilisateur.
+     *
+     * @return list<array<string, mixed>>
+     */
+    private function sharedWithMe(User $user): array
     {
-        $docIds = Access::query()
+        return Access::query()
             ->active()
             ->where('user_id', $user->id)
-            ->where('accessible_type', 'document')
-            ->pluck('accessible_id');
+            ->whereIn('accessible_type', ['document', 'folder'])
+            ->with(['accessible', 'grantor:id,name'])
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->filter(fn (Access $access) => $access->accessible !== null)
+            ->map(function (Access $access) {
+                $accessible = $access->accessible;
+                $grantor = $access->grantor
+                    ? ['id' => $access->grantor->id, 'name' => $access->grantor->name]
+                    : null;
 
-        if ($docIds->isEmpty()) {
-            return [];
-        }
+                if ($accessible instanceof Document) {
+                    return [
+                        'access_id' => $access->id,
+                        'type' => 'document',
+                        'id' => $accessible->id,
+                        'title' => $accessible->title,
+                        'name' => $accessible->title,
+                        'reference' => $accessible->reference,
+                        'status' => $accessible->status?->value ?? $accessible->status,
+                        'author' => $grantor,
+                        'grantor' => $grantor,
+                    ];
+                }
 
-        return Document::query()
-            ->whereIn('id', $docIds)
-            ->with(['folder:id,name', 'author:id,name'])
-            ->latest('updated_at')
-            ->limit(8)
-            ->get(['id', 'reference', 'title', 'status', 'folder_id', 'author_id', 'updated_at'])
+                if ($accessible instanceof Folder) {
+                    return [
+                        'access_id' => $access->id,
+                        'type' => 'folder',
+                        'id' => $accessible->id,
+                        'title' => $accessible->name,
+                        'name' => $accessible->name,
+                        'status' => null,
+                        'author' => $grantor,
+                        'grantor' => $grantor,
+                    ];
+                }
+
+                return null;
+            })
+            ->filter()
+            ->values()
             ->all();
     }
 

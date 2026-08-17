@@ -59,6 +59,8 @@ export default function DocumentAccessPanel({
 
   function invalidateAccesses() {
     queryClient.invalidateQueries({ queryKey: accessesKey })
+    queryClient.invalidateQueries({ queryKey: ['accesses', 'mine'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.dashboard })
     queryClient.invalidateQueries({ queryKey: ['folders'] })
     queryClient.invalidateQueries({ queryKey: ['documents'] })
   }

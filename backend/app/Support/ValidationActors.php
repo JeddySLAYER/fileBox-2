@@ -27,12 +27,6 @@ final class ValidationActors
             );
         }
 
-        if ($ids->isEmpty()) {
-            $ids = User::query()
-                ->whereHas('roles.permissions', fn ($q) => $q->where('slug', 'validations.act'))
-                ->pluck('id');
-        }
-
         return $ids->map(fn ($id) => (int) $id)->unique()->filter()->values();
     }
 

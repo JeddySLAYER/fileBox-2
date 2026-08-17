@@ -181,25 +181,45 @@ function HomeDashboard({ data }) {
 
       <div className="mt-6 grid gap-4 lg:grid-cols-3">
         <Card>
-          <div className="flex items-center gap-2">
-            <Share2 className="h-4 w-4 text-muted-foreground" />
-            <h2 className="text-sm font-semibold">Partagés avec moi</h2>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Share2 className="h-4 w-4 text-muted-foreground" />
+              <h2 className="text-sm font-semibold">Partagés avec moi</h2>
+            </div>
+            <SeeMore to="/shared" />
           </div>
           <ul className="mt-4 divide-y divide-border">
             {(data.shared_documents ?? []).length === 0 ? (
               <li className="py-6 text-sm text-muted-foreground">Aucun partage.</li>
             ) : (
-              data.shared_documents.map((doc) => (
-                <li key={doc.id} className="flex items-center justify-between gap-3 py-3">
-                  <div className="min-w-0">
-                    <DocLink doc={doc} />
-                    <p className="truncate text-xs text-muted-foreground">
-                      {doc.author?.name ?? '—'}
-                    </p>
-                  </div>
-                  <Badge tone={statusTone(doc.status)}>{statusLabel(doc.status)}</Badge>
-                </li>
-              ))
+              data.shared_documents.map((item) => {
+                const isFolder = item.type === 'folder'
+                const href = isFolder ? `/explorer?folder=${item.id}` : `/documents/${item.id}`
+                const label = item.title ?? item.name ?? (isFolder ? 'Dossier' : 'Document')
+                return (
+                  <li
+                    key={item.access_id ?? `${item.type}-${item.id}`}
+                    className="flex items-center justify-between gap-3 py-3"
+                  >
+                    <div className="min-w-0">
+                      <Link to={href} className="truncate text-sm font-medium hover:text-primary">
+                        {label}
+                      </Link>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {isFolder ? 'Dossier' : 'Document'}
+                        {item.grantor?.name || item.author?.name
+                          ? ` · ${item.grantor?.name ?? item.author?.name}`
+                          : ''}
+                      </p>
+                    </div>
+                    {item.status ? (
+                      <Badge tone={statusTone(item.status)}>{statusLabel(item.status)}</Badge>
+                    ) : (
+                      <Badge>Dossier</Badge>
+                    )}
+                  </li>
+                )
+              })
             )}
           </ul>
         </Card>
@@ -335,7 +355,7 @@ export default function DashboardPage() {
   const stats = [
     { label: 'Documents', value: data.counts.documents, icon: FileText },
     { label: 'Archivés', value: data.counts.documents_archived ?? 0, icon: Archive },
-    data.scope?.mode !== 'department'
+    data.scope?.mode === 'global'
       ? { label: 'Utilisateurs', value: data.counts.users_active, icon: Users }
       : null,
     { label: 'Validations', value: data.counts.validations_pending, icon: GitPullRequest },

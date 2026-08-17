@@ -16,49 +16,42 @@ class NotifyValidationStakeholders
 {
     public function handle(ValidationActionTaken $event): void
     {
-        $document = $event->document;
-        $validation = $event->validation->fresh(['workflowStep']);
+        $document = $event->document->fresh() ?? $event->document;
+        $validation = $event->validation->fresh(['workflowStep']) ?? $event->validation;
         $action = $event->notificationAction;
+
+        if ($action === 'approved') {
+            $this->notifyAfterApprove($document, $validation, $event->excludeUserId);
+
+            return;
+        }
 
         $ids = match ($action) {
             'started' => ValidationActors::stepResponsibleIds($validation)
                 ->merge(ValidationActors::authorOwnerIds($document, $event->excludeUserId)),
-            'approved' => $this->afterApproveIds($document, $validation, $event->excludeUserId),
             'rejected', 'correction_requested' => ValidationActors::authorOwnerIds($document, $event->excludeUserId)
                 ->merge(ValidationActors::projectManagerIds($document))
                 ->merge(ValidationActors::administratorIds()),
             default => ValidationActors::authorOwnerIds($document, $event->excludeUserId),
         };
 
-        $ids = $ids
-            ->unique()
-            ->filter()
-            ->when($event->excludeUserId, fn ($c) => $c->reject(fn ($id) => $id === $event->excludeUserId))
-            ->values();
-
-        if ($ids->isEmpty()) {
-            return;
-        }
-
-        $notifyAction = $action;
-        if ($action === 'approved' && $document->fresh()->status === DocumentStatus::Validated) {
-            $notifyAction = 'completed';
-        }
-
-        Notification::send(
-            User::query()->whereIn('id', $ids)->get(),
-            new ValidationActionNotification($document, $validation, $notifyAction),
-        );
+        $this->sendTo($ids, $document, $validation, $action, $event->excludeUserId);
     }
 
-    /** @return Collection<int, int> */
-    private function afterApproveIds($document, Validation $validation, ?int $excludeUserId): Collection
+    private function notifyAfterApprove($document, Validation $approved, ?int $excludeUserId): void
     {
-        $document = $document->fresh();
-
         if ($document->status === DocumentStatus::Validated) {
-            return ValidationActors::authorOwnerIds($document, $excludeUserId)
-                ->merge(ValidationActors::projectManagerIds($document));
+            $this->sendTo(
+                ValidationActors::authorOwnerIds($document, $excludeUserId)
+                    ->merge(ValidationActors::projectManagerIds($document))
+                    ->merge(ValidationActors::administratorIds()),
+                $document,
+                $approved,
+                'completed',
+                $excludeUserId,
+            );
+
+            return;
         }
 
         $next = Validation::query()
@@ -70,9 +63,52 @@ class NotifyValidationStakeholders
             ->first();
 
         if ($next) {
-            return ValidationActors::stepResponsibleIds($next);
+            $nextAssignees = ValidationActors::stepResponsibleIds($next);
+            $followers = ValidationActors::authorOwnerIds($document, $excludeUserId)
+                ->merge(ValidationActors::projectManagerIds($document))
+                ->merge(ValidationActors::administratorIds())
+                ->reject(fn ($id) => $nextAssignees->contains((int) $id))
+                ->values();
+
+            // Suivi : auteur, chef projet, admin sont informés de l’avancement.
+            $this->sendTo($followers, $document, $approved, 'approved', $excludeUserId);
+
+            // Action : le validateur de l’étape suivante est sollicité.
+            $this->sendTo($nextAssignees, $document, $next, 'started', $excludeUserId);
+
+            return;
         }
 
-        return ValidationActors::authorOwnerIds($document, $excludeUserId);
+        $this->sendTo(
+            ValidationActors::authorOwnerIds($document, $excludeUserId),
+            $document,
+            $approved,
+            'approved',
+            $excludeUserId,
+        );
+    }
+
+    /** @param  Collection<int, int>  $ids */
+    private function sendTo(
+        Collection $ids,
+        $document,
+        Validation $validation,
+        string $action,
+        ?int $excludeUserId,
+    ): void {
+        $ids = $ids
+            ->unique()
+            ->filter()
+            ->when($excludeUserId, fn ($c) => $c->reject(fn ($id) => $id === $excludeUserId))
+            ->values();
+
+        if ($ids->isEmpty()) {
+            return;
+        }
+
+        Notification::send(
+            User::query()->whereIn('id', $ids)->get(),
+            new ValidationActionNotification($document, $validation, $action),
+        );
     }
 }

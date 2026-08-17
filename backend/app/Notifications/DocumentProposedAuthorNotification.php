@@ -5,7 +5,7 @@ namespace App\Notifications;
 use App\Models\Document;
 use Illuminate\Notifications\Notification;
 
-class DocumentProposedNotification extends Notification
+class DocumentProposedAuthorNotification extends Notification
 {
     public function __construct(
         private readonly Document $document,
@@ -21,9 +21,9 @@ class DocumentProposedNotification extends Notification
     public function toArray(object $notifiable): array
     {
         return [
-            'type' => 'document.proposed',
+            'type' => 'document.proposed.author',
             'title' => 'Document proposé à validation',
-            'message' => "« {$this->document->title} » ({$this->document->reference}) a été proposé et attend une décision (accepter ou assigner un workflow).",
+            'message' => "Votre document « {$this->document->title} » ({$this->document->reference}) a été proposé à validation. Un responsable décidera de l’accepter ou d’y assigner un workflow.",
             'document_id' => $this->document->id,
             'project_id' => $this->document->project_id,
         ];

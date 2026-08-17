@@ -36,7 +36,7 @@ class ValidationController extends Controller
         $this->authorize('view', $document);
 
         return ValidationResource::collection(
-            $this->validationService->listForDocument($document)
+            $this->validationService->listForDocument($document, request()->user())
         );
     }
 

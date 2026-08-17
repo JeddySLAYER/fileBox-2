@@ -66,6 +66,11 @@ class FileStorageService
         Storage::disk(self::DISK)->delete($path);
     }
 
+    public function deleteDocumentDirectory(int $documentId): void
+    {
+        Storage::disk(self::DISK)->deleteDirectory("documents/{$documentId}");
+    }
+
     public function get(string $path): ?string
     {
         return Storage::disk(self::DISK)->get($path);

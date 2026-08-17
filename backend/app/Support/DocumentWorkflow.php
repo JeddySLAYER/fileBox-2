@@ -27,7 +27,8 @@ class DocumentWorkflow
 
     /**
      * Projet public = éligible au workflow.
-     * Le circuit ne démarre que si le document est proposé, sauf si le type exige une validation.
+     * Collaborateur → proposition ; admin / chef / responsable → validé sauf requires_workflow.
+     * Type requires_workflow → démarrage auto.
      */
     public static function subjectToWorkflow(Document $document): bool
     {
@@ -73,6 +74,20 @@ class DocumentWorkflow
         return in_array($document->status, [DocumentStatus::Draft, DocumentStatus::Rejected], true);
     }
 
+    /** Accepter sans circuit (chef / admin) — interdit si le type exige un workflow. */
+    public static function canAcceptProposition(Document $document): bool
+    {
+        if (! self::subjectToWorkflow($document)) {
+            return false;
+        }
+
+        if (self::requiresWorkflow($document)) {
+            return false;
+        }
+
+        return $document->status === DocumentStatus::Proposed;
+    }
+
     public static function canStartValidation(Document $document): bool
     {
         if (self::isPersonal($document)) {
@@ -83,7 +98,7 @@ class DocumentWorkflow
             return true;
         }
 
-        // Type qui exige une validation : un responsable peut démarrer sans passer par « proposé ».
+        // Type qui exige une validation : démarrage possible depuis brouillon / rejeté.
         return self::requiresWorkflow($document)
             && in_array($document->status, [DocumentStatus::Draft, DocumentStatus::Rejected], true);
     }

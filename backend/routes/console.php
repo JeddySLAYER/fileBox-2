@@ -39,6 +39,12 @@ Artisan::command('users:clear-invite-departments', function () {
     $this->info("Comptes transverses détachés de leur département: {$count}");
 })->purpose('Retire le département des comptes admin, direction, chef de projet et invité');
 
+Artisan::command('trash:purge', function (\App\Services\Trash\TrashService $trash) {
+    $counts = $trash->purgeExpired();
+    $this->info("Corbeille purgée — documents: {$counts['documents']}, dossiers: {$counts['folders']}");
+})->purpose('Supprime définitivement les éléments en corbeille depuis plus de 30 jours');
+
 Schedule::command('accesses:revoke-expired')->everyMinute();
 Schedule::command('notifications:access-deadlines')->hourly();
 Schedule::command('notifications:validation-reminders')->everyFifteenMinutes();
+Schedule::command('trash:purge')->daily();

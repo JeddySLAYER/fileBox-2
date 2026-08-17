@@ -32,7 +32,9 @@ class ValidationActionNotification extends Notification
             'completed' => 'Workflow de validation terminé',
         ];
 
+        $this->validation->loadMissing('workflowStep');
         $stepName = $this->validation->workflowStep?->name;
+
         $isValidator = ValidationActors::stepResponsibleIds($this->validation)
             ->contains((int) $notifiable->id);
 
@@ -44,12 +46,17 @@ class ValidationActionNotification extends Notification
                 'document_id' => $this->document->id,
                 'validation_id' => $this->validation->id,
                 'status' => $this->validation->status?->value ?? $this->validation->status,
+                'href' => "/documents/{$this->document->id}?tab=validations",
             ];
         }
 
         $message = match ($this->action) {
             'started' => "Votre action est attendue sur « {$this->document->title} »"
-                .($stepName ? " (étape : {$stepName})" : '').'.',
+                .($stepName ? " (étape : {$stepName})" : '')
+                .'. Consultez Validations → À suivre.',
+            'approved' => "L’étape"
+                .($stepName ? " « {$stepName} »" : '')
+                ." de « {$this->document->title} » a été approuvée. Le circuit se poursuit — suivez l’évolution sur la fiche document.",
             'completed' => "Le document « {$this->document->title} » a été validé.",
             default => ($labels[$this->action] ?? 'Mise à jour de validation')." — « {$this->document->title} ».",
         };
@@ -61,6 +68,9 @@ class ValidationActionNotification extends Notification
             'document_id' => $this->document->id,
             'validation_id' => $this->validation->id,
             'status' => $this->validation->status?->value ?? $this->validation->status,
+            'href' => $this->action === 'started'
+                ? '/validations?tab=suivre'
+                : "/documents/{$this->document->id}?tab=validations",
         ];
     }
 }

@@ -9,6 +9,7 @@ use App\Models\DocumentType;
 use App\Models\Folder;
 use App\Models\User;
 use App\Models\Version;
+use App\Events\Document\DocumentAccepted;
 use App\Events\Document\DocumentArchived;
 use App\Events\Document\DocumentContentSaved;
 use App\Events\Document\DocumentCreated;
@@ -20,8 +21,10 @@ use App\Events\Document\DocumentUnarchived;
 use App\Events\Document\DocumentVersionCreated;
 use App\Services\Access\SpaceVisibility;
 use App\Services\Storage\FileStorageService;
+use App\Services\Validation\ValidationService;
 use App\Support\DocumentEditability;
 use App\Support\DocumentWorkflow;
+use App\Models\Workflow;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
@@ -33,6 +36,7 @@ class DocumentService
     public function __construct(
         private readonly FileStorageService $files,
         private readonly SpaceVisibility $spaceVisibility,
+        private readonly ValidationService $validationService,
     ) {}
 
     /**
@@ -78,6 +82,17 @@ class DocumentService
             $query->where('project_id', $filters['project_id']);
         }
 
+        // Espace projet : les collaborateurs ne voient pas propose / en_validation.
+        // Admin, gestionnaires workflow et chefs de projet les voient (pour trancher / suivre).
+        // Après validation complète, le document réapparaît pour tout le monde.
+        $inSpaceContext = ! empty($filters['folder_id'])
+            || ! empty($filters['explorer_root'])
+            || ! empty($filters['project_id']);
+
+        if ($inSpaceContext && empty($filters['status'])) {
+            $this->restrictPendingWorkflowInSpace($query, $actor);
+        }
+
         if (! empty($filters['status'])) {
             $query->where('status', $filters['status']);
         }
@@ -85,6 +100,34 @@ class DocumentService
         $this->spaceVisibility->applyDocumentScope($query, $actor);
 
         return $query->paginate($perPage);
+    }
+
+    /**
+     * Masque propose / en_validation dans l’espace sauf pour admin, workflow managers et chefs projet.
+     */
+    private function restrictPendingWorkflowInSpace($query, User $actor): void
+    {
+        if ($actor->hasRole('administrateur') || $actor->hasPermission('workflows.manage')) {
+            return;
+        }
+
+        $managedProjectIds = $actor->managedProjects()->pluck('id')->all();
+
+        $query->where(function ($q) use ($managedProjectIds) {
+            $q->whereNotIn('status', [
+                DocumentStatus::Proposed,
+                DocumentStatus::InValidation,
+            ]);
+
+            if ($managedProjectIds !== []) {
+                $q->orWhere(function ($pending) use ($managedProjectIds) {
+                    $pending->whereIn('status', [
+                        DocumentStatus::Proposed,
+                        DocumentStatus::InValidation,
+                    ])->whereIn('project_id', $managedProjectIds);
+                });
+            }
+        });
     }
 
     /**
@@ -142,7 +185,7 @@ class DocumentService
 
             event(new DocumentCreated($loaded, $actor));
 
-            return $loaded;
+            return $this->applyProjectDepositRules($loaded, $actor);
         });
     }
 
@@ -205,7 +248,7 @@ class DocumentService
             $loaded = $this->loadDocument($document);
             event(new DocumentCreated($loaded, $actor));
 
-            return $loaded;
+            return $this->applyProjectDepositRules($loaded, $actor);
         });
     }
 
@@ -315,6 +358,111 @@ class DocumentService
     }
 
     /**
+     * Accepte une proposition sans circuit (chef projet / admin).
+     * Impossible si le type exige un workflow.
+     */
+    public function acceptProposition(Document $document, User $actor): Document
+    {
+        if (! DocumentWorkflow::canAcceptProposition($document)) {
+            throw ValidationException::withMessages([
+                'document' => [
+                    DocumentWorkflow::requiresWorkflow($document)
+                        ? 'Ce type exige un circuit de validation : assignez un workflow.'
+                        : 'Cette proposition ne peut pas être acceptée dans son état actuel.',
+                ],
+            ]);
+        }
+
+        $document->status = DocumentStatus::Validated;
+        $document->save();
+
+        $loaded = $this->loadDocument($document);
+        event(new DocumentAccepted($loaded, $actor));
+
+        return $loaded;
+    }
+
+    /**
+     * Après dépôt dans un espace projet public :
+     * - type avec workflow obligatoire → démarrage immédiat du workflow par défaut ;
+     * - admin / chef projet / responsable → validé tout de suite (pas de circuit) ;
+     * - collaborateur → proposition automatique.
+     */
+    private function applyProjectDepositRules(Document $document, User $actor): Document
+    {
+        if (! DocumentWorkflow::subjectToWorkflow($document)) {
+            return $document;
+        }
+
+        $document->loadMissing('documentType');
+
+        if (DocumentWorkflow::requiresWorkflow($document)) {
+            $workflowId = DocumentWorkflow::resolveWorkflowId(
+                $document->workflow_id,
+                $document->documentType,
+            );
+
+            if ($workflowId) {
+                $workflow = Workflow::query()
+                    ->where('is_active', true)
+                    ->find($workflowId);
+
+                if ($workflow) {
+                    return $this->validationService->start($document, $workflow);
+                }
+            }
+
+            return $this->markAsProposed($document, $actor);
+        }
+
+        if ($this->actorDepositsWithoutValidation($actor)) {
+            return $this->markAsValidatedOnDeposit($document);
+        }
+
+        return $this->markAsProposed($document, $actor);
+    }
+
+    private function markAsProposed(Document $document, User $actor): Document
+    {
+        if ($document->status !== DocumentStatus::Draft) {
+            return $document;
+        }
+
+        $document->status = DocumentStatus::Proposed;
+        $document->save();
+
+        $loaded = $this->loadDocument($document);
+        event(new DocumentProposed($loaded, $actor));
+
+        return $loaded;
+    }
+
+    /** Dépôt manager : document immédiatement disponible dans l’espace, sans circuit. */
+    private function markAsValidatedOnDeposit(Document $document): Document
+    {
+        if ($document->status !== DocumentStatus::Draft) {
+            return $document;
+        }
+
+        $document->status = DocumentStatus::Validated;
+        $document->save();
+
+        return $this->loadDocument($document);
+    }
+
+    /**
+     * Admin, chef de projet, responsable département (ou droit workflows.manage) :
+     * pas de proposition / validation sauf si le type l’exige.
+     */
+    private function actorDepositsWithoutValidation(User $actor): bool
+    {
+        return $actor->hasRole('administrateur')
+            || $actor->hasRole('chef_projet')
+            || $actor->hasRole('responsable_departement')
+            || $actor->hasPermission('workflows.manage');
+    }
+
+    /**
      * Mise à jour des métadonnées uniquement (pas le contenu).
      *
      * @param  array{title?: string, description?: string|null, folder_id?: int, project_id?: int|null, department_id?: int|null, document_type_id?: int|null, workflow_id?: int|null, owner_id?: int, confidentiality?: string, language?: string|null, tag_ids?: array<int>}  $data
@@ -379,6 +527,45 @@ class DocumentService
             event(new DocumentVersionCreated($loaded, $actor, $nextNumber));
 
             return $loaded;
+        });
+    }
+
+    /**
+     * Définit quelle version est la version à jour (chef projet / responsable / admin).
+     */
+    public function setCurrentVersion(Document $document, Version $version, User $actor): Document
+    {
+        if ((int) $version->document_id !== (int) $document->id) {
+            throw ValidationException::withMessages([
+                'version' => ['Cette version n’appartient pas à ce document.'],
+            ]);
+        }
+
+        if ($document->status === DocumentStatus::Archived) {
+            throw ValidationException::withMessages([
+                'document' => ['Un document archivé ne peut pas changer de version courante.'],
+            ]);
+        }
+
+        return DB::transaction(function () use ($document, $version) {
+            if ((int) $document->current_version_id === (int) $version->id) {
+                return $this->loadDocument($document, withVersions: true);
+            }
+
+            $previous = $document->currentVersion;
+            if ($previous && ! $previous->is_locked) {
+                $previous->is_locked = true;
+                $previous->save();
+            }
+
+            $version->is_locked = false;
+            $version->save();
+
+            $document->current_version_id = $version->id;
+            $document->is_editable = DocumentEditability::fromExtension($version->extension);
+            $document->save();
+
+            return $this->loadDocument($document, withVersions: true);
         });
     }
 
@@ -632,6 +819,18 @@ class DocumentService
         event(new DocumentRestored($document));
 
         return $document->load(['folder', 'author', 'owner', 'currentVersion']);
+    }
+
+    public function forceDelete(Document $document): void
+    {
+        DB::transaction(function () use ($document) {
+            $document->accesses()->delete();
+            $document->favorites()->delete();
+            $document->current_version_id = null;
+            $document->save();
+            $this->files->deleteDocumentDirectory($document->id);
+            $document->forceDelete();
+        });
     }
 
     private function storeUploadedVersion(

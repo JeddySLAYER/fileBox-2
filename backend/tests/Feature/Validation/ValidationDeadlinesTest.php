@@ -34,6 +34,7 @@ test('favoris dossier ajout et retrait', function () {
 
 test('démarrage workflow avec délais par étape', function () {
     $admin = adminUser();
+    $validator = collaboratorUser();
     Sanctum::actingAs($admin);
 
     $project = Project::query()->create([
@@ -60,8 +61,18 @@ test('démarrage workflow avec délais par étape', function () {
         'created_by' => $admin->id,
         'is_active' => true,
     ]);
-    $s1 = $workflow->steps()->create(['name' => 'S1', 'step_order' => 1, 'is_mandatory' => true]);
-    $s2 = $workflow->steps()->create(['name' => 'S2', 'step_order' => 2, 'is_mandatory' => true]);
+    $s1 = $workflow->steps()->create([
+        'name' => 'S1',
+        'step_order' => 1,
+        'is_mandatory' => true,
+        'responsible_user_id' => $validator->id,
+    ]);
+    $s2 = $workflow->steps()->create([
+        'name' => 'S2',
+        'step_order' => 2,
+        'is_mandatory' => true,
+        'responsible_user_id' => $validator->id,
+    ]);
 
     $this->postJson("/api/documents/{$docId}/propose")->assertOk();
 
@@ -81,6 +92,7 @@ test('démarrage workflow avec délais par étape', function () {
         ->and($v2->sla_hours)->toBe(24)
         ->and($v2->due_at)->toBeNull();
 
+    Sanctum::actingAs($validator);
     $this->postJson("/api/validations/{$v1->id}/approve", ['comment' => 'OK'])->assertOk();
 
     expect($v2->fresh()->due_at)->not->toBeNull()

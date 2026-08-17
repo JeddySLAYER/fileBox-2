@@ -1,14 +1,20 @@
 <?php
 
 use App\Models\Department;
+use App\Models\Document;
 use App\Models\Folder;
 use App\Models\Project;
 use App\Models\Role;
 use App\Models\User;
 use Database\Seeders\RolePermissionSeeder;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 
-beforeEach(fn () => $this->seed(RolePermissionSeeder::class));
+beforeEach(function () {
+    $this->seed(RolePermissionSeeder::class);
+    Storage::fake('local');
+});
 
 test('un admin peut créer un projet avec membres départements et dossier racine', function () {
     Sanctum::actingAs(adminUser());
@@ -164,25 +170,48 @@ test('un admin peut synchroniser les membres d un projet', function () {
 test('un admin peut supprimer un projet et réutiliser son code', function () {
     Sanctum::actingAs(adminUser());
 
-    $project = Project::query()->create([
+    $create = $this->postJson('/api/projects', [
         'name' => 'Archive',
         'code' => 'PRJ-ARC-2026',
+        'department_ids' => [Department::query()->create(['name' => 'Ops', 'code' => 'OPS'])->id],
+    ])->assertCreated()->json('project');
+
+    $projectId = $create['id'];
+    $rootId = $create['root_folder_id'];
+
+    $child = Folder::query()->create([
+        'name' => 'Sous-dossier',
+        'parent_id' => $rootId,
+        'project_id' => $projectId,
+        'created_by' => adminUser()->id,
     ]);
 
-    $this->deleteJson("/api/projects/{$project->id}")->assertOk();
+    $docId = $this->post('/api/documents', [
+        'title' => 'Dans le projet',
+        'folder_id' => $child->id,
+        'file' => UploadedFile::fake()->create('p.pdf', 5, 'application/pdf'),
+    ], ['Accept' => 'application/json'])->assertCreated()->json('document.id');
 
-    $archived = Project::withTrashed()->find($project->id);
+    $this->deleteJson("/api/projects/{$projectId}")->assertOk();
+
+    $archived = Project::withTrashed()->find($projectId);
     expect($archived->trashed())->toBeTrue()
-        ->and($archived->code)->not->toBe('PRJ-ARC-2026');
+        ->and($archived->code)->not->toBe('PRJ-ARC-2026')
+        ->and($archived->root_folder_id)->toBeNull()
+        ->and(Folder::onlyTrashed()->find($rootId))->not->toBeNull()
+        ->and(Folder::onlyTrashed()->find($child->id))->not->toBeNull()
+        ->and(Document::onlyTrashed()->find($docId))->not->toBeNull()
+        ->and(Folder::query()->find($rootId))->toBeNull()
+        ->and(Document::query()->find($docId))->toBeNull();
 
     $this->postJson('/api/projects', [
         'name' => 'Archive 2',
         'code' => 'PRJ-ARC-2026',
-        'department_ids' => [Department::query()->create(['name' => 'Ops', 'code' => 'OPS'])->id],
+        'department_ids' => [Department::query()->create(['name' => 'Ops2', 'code' => 'OPS2'])->id],
     ])->assertCreated()
         ->assertJsonPath('project.code', 'PRJ-ARC-2026');
 
-    $this->postJson("/api/projects/{$project->id}/restore")->assertNotFound();
+    $this->postJson("/api/projects/{$projectId}/restore")->assertNotFound();
 });
 
 test('un admin peut filtrer les projets par département', function () {

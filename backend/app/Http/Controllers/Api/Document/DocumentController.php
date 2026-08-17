@@ -10,6 +10,7 @@ use App\Http\Requests\Document\StoreDocumentVersionRequest;
 use App\Http\Requests\Document\UpdateDocumentRequest;
 use App\Http\Resources\DocumentResource;
 use App\Http\Resources\VersionResource;
+use App\Enums\DocumentStatus;
 use App\Models\Document;
 use App\Models\Folder;
 use App\Models\Version;
@@ -60,8 +61,14 @@ class DocumentController extends Controller
             file: $request->file('file'),
         );
 
+        $message = match ($document->status) {
+            DocumentStatus::InValidation => 'Document déposé et circuit de validation démarré.',
+            DocumentStatus::Proposed => 'Document proposé à validation.',
+            default => 'Document créé avec version initiale.',
+        };
+
         return response()->json([
-            'message' => 'Document créé avec version initiale.',
+            'message' => $message,
             'document' => new DocumentResource($document),
         ], 201);
     }
@@ -127,6 +134,19 @@ class DocumentController extends Controller
         ]);
     }
 
+    public function forceDestroy(int $id): JsonResponse
+    {
+        $document = Document::onlyTrashed()->findOrFail($id);
+
+        $this->authorize('forceDelete', $document);
+
+        $this->documentService->forceDelete($document);
+
+        return response()->json([
+            'message' => 'Document supprimé définitivement.',
+        ]);
+    }
+
     public function move(MoveDocumentRequest $request, Document $document): JsonResponse
     {
         $this->authorize('update', $document);
@@ -187,6 +207,18 @@ class DocumentController extends Controller
         ]);
     }
 
+    public function acceptProposition(Document $document): JsonResponse
+    {
+        $this->authorize('acceptProposition', $document);
+
+        $document = $this->documentService->acceptProposition($document, request()->user());
+
+        return response()->json([
+            'message' => 'Proposition acceptée. Le document est validé.',
+            'document' => new DocumentResource($document),
+        ]);
+    }
+
     public function storeVersion(StoreDocumentVersionRequest $request, Document $document): JsonResponse
     {
         $this->authorize('version', $document);
@@ -202,6 +234,26 @@ class DocumentController extends Controller
             'message' => 'Nouvelle version créée via upload.',
             'document' => new DocumentResource($document),
         ], 201);
+    }
+
+    public function setCurrentVersion(Document $document, Version $version): JsonResponse
+    {
+        $this->authorize('setCurrentVersion', $document);
+
+        if ($version->document_id !== $document->id) {
+            abort(404, 'Version introuvable.');
+        }
+
+        $document = $this->documentService->setCurrentVersion(
+            $document,
+            $version,
+            request()->user(),
+        );
+
+        return response()->json([
+            'message' => 'Version courante mise à jour.',
+            'document' => new DocumentResource($document),
+        ]);
     }
 
     /**

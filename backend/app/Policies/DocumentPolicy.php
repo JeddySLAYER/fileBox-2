@@ -2,6 +2,7 @@
 
 namespace App\Policies;
 
+use App\Enums\DocumentStatus;
 use App\Models\Document;
 use App\Models\User;
 use App\Services\Access\AccessService;
@@ -23,13 +24,39 @@ class DocumentPolicy
 
     public function view(User $actor, Document $document): bool
     {
-        if ($this->spaceVisibility->canViewDocument($actor, $document)) {
+        // Proposition / circuit : réservé aux décideurs (admin, chef) et au validateur de l’étape courante.
+        if (in_array($document->status, [DocumentStatus::Proposed, DocumentStatus::InValidation], true)) {
+            return $this->canSeePendingWorkflowDocument($actor, $document);
+        }
+
+        return $this->spaceVisibility->canViewDocument($actor, $document);
+    }
+
+    /** Admin / chef / auteur, ou validateur de l’étape courante uniquement. */
+    private function canSeePendingWorkflowDocument(User $actor, Document $document): bool
+    {
+        if ($actor->hasRole('administrateur') || $actor->hasPermission('workflows.manage')) {
             return true;
         }
 
-        $current = app(\App\Services\Validation\ValidationService::class)->currentPending($document);
+        if ((int) $actor->id === (int) $document->author_id
+            || (int) $actor->id === (int) $document->owner_id) {
+            return true;
+        }
 
-        return $current !== null && $actor->can('act', $current);
+        $document->loadMissing('project');
+
+        if ($document->project_id
+            && $actor->managedProjects()->where('id', $document->project_id)->exists()) {
+            return true;
+        }
+
+        if ($document->status !== DocumentStatus::InValidation) {
+            return false;
+        }
+
+        return app(\App\Services\Validation\ValidationService::class)
+            ->userIsCurrentStepAssignee($actor, $document);
     }
 
     public function create(User $actor): bool
@@ -61,6 +88,11 @@ class DocumentPolicy
     {
         return $this->spaceVisibility->canViewDocument($actor, $document)
             && $actor->hasPermission('documents.update');
+    }
+
+    public function forceDelete(User $actor, Document $document): bool
+    {
+        return $this->delete($actor, $document);
     }
 
     public function archive(User $actor, Document $document): bool
@@ -127,6 +159,45 @@ class DocumentPolicy
         }
 
         return $this->canManageProjectWorkflow($actor, $document);
+    }
+
+    public function acceptProposition(User $actor, Document $document): bool
+    {
+        if (! DocumentWorkflow::canAcceptProposition($document)) {
+            return false;
+        }
+
+        return $this->canManageProjectWorkflow($actor, $document);
+    }
+
+    public function setCurrentVersion(User $actor, Document $document): bool
+    {
+        if (! $this->spaceVisibility->canViewDocument($actor, $document)) {
+            return false;
+        }
+
+        if ($document->status === DocumentStatus::Archived) {
+            return false;
+        }
+
+        if ($actor->hasRole('administrateur') || $actor->hasPermission('workflows.manage')) {
+            return true;
+        }
+
+        $document->loadMissing('project');
+
+        if ($document->project_id
+            && $actor->managedProjects()->where('id', $document->project_id)->exists()) {
+            return true;
+        }
+
+        $departmentId = $document->department_id ?? $document->project?->department_id;
+        if ($departmentId
+            && $actor->managedDepartments()->where('id', $departmentId)->exists()) {
+            return true;
+        }
+
+        return false;
     }
 
     public function resetWorkflow(User $actor, Document $document): bool

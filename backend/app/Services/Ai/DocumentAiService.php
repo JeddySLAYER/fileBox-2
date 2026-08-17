@@ -48,7 +48,7 @@ class DocumentAiService
 
         $brief = $this->gemini->generate(
             $parts,
-            'Tu es un assistant GED. Tu combines résumé et analyse en une seule fiche, sans inventer de faits.',
+            $this->gedSystemInstruction(),
         );
 
         $document->summary = $brief;
@@ -76,11 +76,11 @@ class DocumentAiService
 
         $parts = $this->buildParts(
             $version,
-            'Extrais tout le texte lisible de ce document (OCR). Conserve la structure (titres, listes, paragraphes) autant que possible. Si une zone est illisible, indique [illisible]. Réponds uniquement avec le texte extrait.',
+            $this->ocrInstruction(),
             forceFile: true,
         );
 
-        $text = $this->gemini->generate($parts, 'Tu es un moteur OCR. Tu restitues uniquement le texte extrait.');
+        $text = $this->gemini->generate($parts, $this->ocrSystemInstruction());
 
         $document->ai_processed_at = Carbon::now();
         $document->save();
@@ -137,10 +137,10 @@ class DocumentAiService
 
         return $this->gemini->generate(
             [
-                ['text' => 'Extrais tout le texte lisible de ce document (OCR). Conserve la structure (titres, listes, paragraphes) autant que possible. Si une zone est illisible, indique [illisible]. Réponds uniquement avec le texte extrait.'],
+                ['text' => $this->ocrInstruction()],
                 ['inline_data' => ['mime_type' => $mimeType, 'data' => base64_encode($binary)]],
             ],
-            'Tu es un moteur OCR. Tu restitues uniquement le texte extrait.',
+            $this->ocrSystemInstruction(),
         );
     }
 
@@ -199,7 +199,7 @@ class DocumentAiService
 
         return $this->gemini->generate(
             $parts,
-            'Tu es un assistant GED. Tu combines résumé et analyse en une seule fiche, sans inventer de faits.',
+            $this->gedSystemInstruction(),
         );
     }
 
@@ -241,14 +241,43 @@ class DocumentAiService
         return $version;
     }
 
+    private function gedSystemInstruction(): string
+    {
+        return 'Tu es un assistant GED. Tu combines résumé et analyse en une seule fiche, sans inventer de faits. '
+            .$this->plainTextFormattingRule();
+    }
+
+    private function ocrSystemInstruction(): string
+    {
+        return 'Tu es un moteur OCR. Tu restitues uniquement le texte extrait. '
+            .$this->plainTextFormattingRule();
+    }
+
+    private function ocrInstruction(): string
+    {
+        return 'Extrais tout le texte lisible de ce document (OCR). '
+            .'Conserve la structure (titres, listes, paragraphes) avec de simples retours à la ligne. '
+            .'Si une zone est illisible, indique [illisible]. Réponds uniquement avec le texte extrait. '
+            .$this->plainTextFormattingRule();
+    }
+
     private function briefInstruction(): string
     {
         return "Produis une fiche en français, claire et factuelle, avec exactement ces sections :\n"
             ."1) Résumé (5 à 8 lignes)\n"
-            ."2) Points clés (liste)\n"
+            ."2) Points clés (liste avec tirets simples -)\n"
             ."3) Type / nature probable du document\n"
             ."4) Ce qu’il faut retenir pour un collaborateur.\n"
-            .'N’invente rien. Si une information n’est pas visible, dis-le.';
+            ."N’invente rien. Si une information n’est pas visible, dis-le.\n"
+            .$this->plainTextFormattingRule();
+    }
+
+    /** Sortie affichée en texte brut côté UI : pas de Markdown ni d’astérisques. */
+    private function plainTextFormattingRule(): string
+    {
+        return 'Ne mets rien en gras. N’utilise aucun astérisque (*), aucune mise en forme Markdown '
+            .'(pas de **, __, #, backticks, listes à puces Markdown), aucune balise HTML. '
+            .'Texte brut uniquement : retours à la ligne et tirets simples (-) si besoin.';
     }
 
     /**

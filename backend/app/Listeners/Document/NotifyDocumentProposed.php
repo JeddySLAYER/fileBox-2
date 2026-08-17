@@ -4,6 +4,7 @@ namespace App\Listeners\Document;
 
 use App\Events\Document\DocumentProposed;
 use App\Models\User;
+use App\Notifications\DocumentProposedAuthorNotification;
 use App\Notifications\DocumentProposedNotification;
 use Illuminate\Support\Facades\Notification;
 
@@ -17,31 +18,43 @@ class NotifyDocumentProposed
         }
 
         $document->loadMissing('project');
+        $actorId = $event->activityUser()?->id;
 
-        $ids = collect();
+        $managerIds = collect();
 
         if ($document->project?->manager_id) {
-            $ids->push($document->project->manager_id);
+            $managerIds->push($document->project->manager_id);
         }
 
-        // Admins / gestionnaires workflow
-        $managerIds = User::query()
-            ->whereHas('roles.permissions', fn ($q) => $q->where('slug', 'workflows.manage'))
-            ->pluck('id');
-
-        $ids = $ids->merge($managerIds)
+        $managerIds = $managerIds
+            ->merge(
+                User::query()
+                    ->whereHas('roles.permissions', fn ($q) => $q->where('slug', 'workflows.manage'))
+                    ->pluck('id')
+            )
             ->unique()
-            ->reject(fn ($id) => $id === $event->activityUser()?->id)
+            ->reject(fn ($id) => $id === $actorId)
             ->filter()
             ->values();
 
-        if ($ids->isEmpty()) {
-            return;
+        if ($managerIds->isNotEmpty()) {
+            Notification::send(
+                User::query()->whereIn('id', $managerIds)->get(),
+                new DocumentProposedNotification($document),
+            );
         }
 
-        Notification::send(
-            User::query()->whereIn('id', $ids)->get(),
-            new DocumentProposedNotification($document),
-        );
+        // Informer le collaborateur (auteur / propriétaire) que son dépôt est bien proposé.
+        $authorIds = collect([$document->author_id, $document->owner_id])
+            ->unique()
+            ->filter()
+            ->values();
+
+        if ($authorIds->isNotEmpty()) {
+            Notification::send(
+                User::query()->whereIn('id', $authorIds)->get(),
+                new DocumentProposedAuthorNotification($document),
+            );
+        }
     }
 }

@@ -14,16 +14,12 @@ class ValidationPolicy
 
     public function act(User $actor, Validation $validation): bool
     {
-        if ($actor->hasPermission('workflows.manage') || $actor->hasPermission('validations.act')) {
-            return true;
-        }
-
         $step = $validation->workflowStep()->first();
         if (! $step) {
             return false;
         }
 
-        if ($step->responsible_user_id && $step->responsible_user_id === $actor->id) {
+        if ($step->responsible_user_id && (int) $step->responsible_user_id === (int) $actor->id) {
             return true;
         }
 
